@@ -1,0 +1,23 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to your Komfovent C5",
+        "description": "Configure the Modbus TCP/IP connection settings for your Komfovent ventilation unit.",
+        "data": {
+          "host": "IP Address or Hostname",
+          "port": "Port",
+          "slave_id": "Slave/Unit ID",
+          "name": "Device Name"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the unit. Check the IP address, Port, and network connection.",
+      "unknown": "Unexpected error occurred during connection attempt."
+    },
+    "abort": {
+      "already_configured": "This Komfovent C5 device is already configured."
+    }
+  }
+}

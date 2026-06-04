@@ -1,0 +1,11 @@
+{
+  "domain": "komfovent_c5",
+  "name": "Komfovent C5",
+  "codeowners": ["@antigravity"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/hacs/default",
+  "iot_class": "local_polling",
+  "requirements": ["pymodbus>=3.0.0"],
+  "version": "1.0.0"
+}
