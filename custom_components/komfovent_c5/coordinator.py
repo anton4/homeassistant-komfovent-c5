@@ -96,7 +96,7 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
         scan_interval: int,
     ) -> None:
         """Initialize the coordinator."""
-        self.client = AsyncModbusTcpClient(host=host, port=port)
+        self.client = AsyncModbusTcpClient(host=host, port=port, timeout=5.0)
         self.slave_id = slave_id
         
         # Add these two lines to save the connection details safely
