@@ -19,5 +19,22 @@
     "abort": {
       "already_configured": "This Komfovent C5 device is already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure Komfovent C5",
+        "description": "Update the connection settings for your Komfovent unit.",
+        "data": {
+          "host": "IP Address or Hostname",
+          "port": "Port",
+          "slave_id": "Slave/Unit ID"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the unit. Check the IP address, Port, and network connection.",
+      "unknown": "Unexpected error occurred during connection attempt."
+    }
   }
 }
