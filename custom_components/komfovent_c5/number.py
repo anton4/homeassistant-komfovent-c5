@@ -6,7 +6,6 @@ from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -20,13 +19,13 @@ NUMBERS: tuple[NumberEntityDescription, ...] = (
     NumberEntityDescription(
         key=REG_SPECIAL_SUPPLY_FLOW,
         name="Special Mode Supply Flow",
-        native_unit_of_measurement=PERCENTAGE,
+        native_unit_of_measurement="m³/h",
         icon="mdi:fan-chevron-up",
     ),
     NumberEntityDescription(
         key=REG_SPECIAL_EXTRACT_FLOW,
         name="Special Mode Extract Flow",
-        native_unit_of_measurement=PERCENTAGE,
+        native_unit_of_measurement="m³/h",
         icon="mdi:fan-chevron-down",
     ),
 )
@@ -44,7 +43,7 @@ async def async_setup_entry(
     )
 
 class KomfoventNumber(CoordinatorEntity[KomfoventCoordinator], NumberEntity):
-    """Representation of a Komfovent Flow percentage."""
+    """Representation of a Komfovent Flow volume."""
 
     entity_description: NumberEntityDescription
 
@@ -66,9 +65,9 @@ class KomfoventNumber(CoordinatorEntity[KomfoventCoordinator], NumberEntity):
             "model": "C5 Controller",
         }
         
-        # 0% completely turns off the fan, otherwise it must be 20%-100%
+        # Absolute flow volume in m3/h. Max value set to 5000 to accommodate larger AHU capacities.
         self._attr_native_min_value = 0
-        self._attr_native_max_value = 100
+        self._attr_native_max_value = 5000
         self._attr_native_step = 1
 
     @property
