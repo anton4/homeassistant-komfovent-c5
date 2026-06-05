@@ -1,6 +1,7 @@
 """Config flow for Komfovent C5 integration."""
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any
 
@@ -17,10 +18,7 @@ from .const import CONF_SLAVE_ID, DEFAULT_NAME, DEFAULT_PORT, DOMAIN, REG_STATUS
 _LOGGER = logging.getLogger(__name__)
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
-    """Validate the user input allows us to connect.
-
-    Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
-    """
+    """Validate the user input allows us to connect."""
     host = data[CONF_HOST]
     port = data[CONF_PORT]
     slave_id = data[CONF_SLAVE_ID]
@@ -34,12 +32,23 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             _LOGGER.error("Failed to connect to Modbus TCP client on %s:%s", host, port)
             raise CannotConnect
 
-        # Read the current status register to verify read capability
-        try:
-            result = await client.read_holding_registers(REG_STATUS, 1, slave=slave_id)
-        except TypeError:
-            # Support older pymodbus versions which use 'unit' instead of 'slave'
-            result = await client.read_holding_registers(REG_STATUS, 1, unit=slave_id)
+        # 0-Indexed test read
+        wire_address = REG_STATUS - 1
+        
+        sig = inspect.signature(client.read_holding_registers)
+        kwargs = {}
+        
+        if 'device_id' in sig.parameters: kwargs['device_id'] = slave_id
+        elif 'slave' in sig.parameters: kwargs['slave'] = slave_id
+        elif 'unit' in sig.parameters: kwargs['unit'] = slave_id
+        else: kwargs['slave'] = slave_id
+
+        if 'count' in sig.parameters or 'kwargs' in sig.parameters:
+            kwargs['count'] = 1
+
+        result = client.read_holding_registers(wire_address, **kwargs)
+        if inspect.isawaitable(result):
+            result = await result
 
         if result.isError():
             _LOGGER.error("Modbus read returned an error response: %s", result)
@@ -51,7 +60,6 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     finally:
         client.close()
 
-    # Return info to store in config entry
     return {"title": data[CONF_NAME]}
 
 class KomfoventConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -66,7 +74,6 @@ class KomfoventConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Abort if the IP/Host is already configured to prevent duplicates
             await self.async_set_unique_id(user_input[CONF_HOST])
             self._abort_if_unique_id_configured()
 
@@ -75,7 +82,7 @@ class KomfoventConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(title=info["title"], data=user_input)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
                 _LOGGER.exception("Unexpected exception in config flow")
                 errors["base"] = "unknown"
 
