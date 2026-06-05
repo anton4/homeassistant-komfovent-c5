@@ -89,9 +89,9 @@ class KomfoventSwitch(CoordinatorEntity[KomfoventCoordinator], SwitchEntity):
         self.entity_description = description
         
         self._attr_name = f"{coordinator.name} {description.name}"
-        self._attr_unique_id = f"{coordinator.client.params.host}_{description.key}"
+        self._attr_unique_id = f"{coordinator.host}_{description.key}"
         self._attr_device_info = {
-            "identifiers": {(DOMAIN, coordinator.client.params.host)},
+            "identifiers": {(DOMAIN, coordinator.host)},
             "name": coordinator.name,
             "manufacturer": "Komfovent",
             "model": "C5 Controller",

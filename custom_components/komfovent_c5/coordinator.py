@@ -99,6 +99,10 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
         self.client = AsyncModbusTcpClient(host=host, port=port)
         self.slave_id = slave_id
         
+        # Add these two lines to save the connection details safely
+        self.host = host
+        self.port = port
+        
         super().__init__(
             hass,
             _LOGGER,
@@ -109,7 +113,7 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
     async def _async_update_data(self) -> dict[int | str, Any]:
         """Fetch data from Modbus."""
         if not self.client.connected:
-            _LOGGER.debug("Connecting to Modbus TCP server %s:%s", self.client.params.host, self.client.params.port)
+            _LOGGER.debug("Connecting to Modbus TCP server %s:%s", self.host, self.port)
             try:
                 connected = await self.client.connect()
                 if not connected:

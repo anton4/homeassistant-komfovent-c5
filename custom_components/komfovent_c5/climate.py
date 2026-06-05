@@ -71,9 +71,9 @@ class KomfoventClimate(CoordinatorEntity[KomfoventCoordinator], ClimateEntity):
         """Initialize the climate entity."""
         super().__init__(coordinator)
         self._attr_name = coordinator.name
-        self._attr_unique_id = f"{coordinator.client.params.host}_climate"
+        self._attr_unique_id = f"{coordinator.host}_climate"
         self._attr_device_info = {
-            "identifiers": {(DOMAIN, coordinator.client.params.host)},
+            "identifiers": {(DOMAIN, coordinator.host)},
             "name": coordinator.name,
             "manufacturer": "Komfovent",
             "model": "C5 Controller",
