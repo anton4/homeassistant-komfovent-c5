@@ -9,7 +9,8 @@ Unlike generic Modbus templates, this integration is purpose-built for the Komfo
 
 ## ✨ Features
 
-* **🌡️ Climate Control:** * Turn the AHU On/Off.
+* **🌡️ Climate Control:** 
+    * Turn the AHU On/Off.
     * View and set the target temperature.
     * Change active preset modes (`Comfort 1`, `Comfort 2`, `Economy 1`, `Economy 2`, `Special`, `Program`).
 * **📊 Comprehensive Monitoring (Sensors):**
