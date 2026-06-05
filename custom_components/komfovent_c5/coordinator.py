@@ -1,8 +1,10 @@
 """Data update coordinator for Komfovent C5 integration."""
 from __future__ import annotations
 
-from datetime import timedelta
+import asyncio
+import inspect
 import logging
+from datetime import timedelta
 from typing import Any
 
 from pymodbus.client import AsyncModbusTcpClient
@@ -31,7 +33,6 @@ from .const import (
     REG_ENERGY_SAVING,
     REG_EXCHANGER_RECOVERY,
     REG_EXHAUST_FAN_LEVEL,
-    REG_EXHAUST_FLOW_SETPOINT,
     REG_EXHAUST_SFP,
     REG_EXHAUST_TEMP,
     REG_EXTRACT_FILTER_DIRTY,
@@ -118,50 +119,76 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
 
         raw_data: dict[int | str, Any] = {}
 
-        # Helper method to read registers while handling pymodbus version differences
+        # Helper method to read registers handling pymodbus versions and 0-indexing
         async def _read_block(address: int, count: int) -> list[int] | None:
+            wire_address = address - 1  # 0-indexing translation
             try:
-                try:
-                    result = await self.client.read_holding_registers(
-                        address, count, slave=self.slave_id
-                    )
-                except TypeError:
-                    result = await self.client.read_holding_registers(
-                        address, count, unit=self.slave_id
-                    )
+                sig = inspect.signature(self.client.read_holding_registers)
+                kwargs = {}
+                
+                if 'device_id' in sig.parameters: kwargs['device_id'] = self.slave_id
+                elif 'slave' in sig.parameters: kwargs['slave'] = self.slave_id
+                elif 'unit' in sig.parameters: kwargs['unit'] = self.slave_id
+                else: kwargs['slave'] = self.slave_id
+
+                if 'count' in sig.parameters or 'kwargs' in sig.parameters:
+                    kwargs['count'] = count
+
+                result = self.client.read_holding_registers(wire_address, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
                 
                 if result.isError():
-                    _LOGGER.warning(
-                        "Error reading Modbus block starting at %s, count %s: %s",
-                        address,
-                        count,
-                        result,
-                    )
+                    # We expect some blocks (like missing heaters) to return errors, log as debug to avoid spam
+                    _LOGGER.debug("Modbus read returned error at address %s: %s", address, result)
                     return None
                 return result.registers
             except Exception as err:
-                _LOGGER.warning(
-                    "Exception reading Modbus block starting at %s, count %s: %s",
-                    address,
-                    count,
-                    err,
-                )
+                _LOGGER.debug("Exception reading Modbus block starting at %s: %s", address, err)
                 return None
 
-        # Polling register blocks
-        block_on_off = await _read_block(REG_ON_OFF, 1)                     # 1
-        block_modes = await _read_block(100, 29)                            # 100-128
-        block_override = await _read_block(REG_OVERRIDE_ENABLE, 9)          # 512-520
-        block_heaters = await _read_block(REG_WATER_HEATER, 3)              # 551-553
-        block_alarms = await _read_block(REG_ALARM_COUNT, 11)               # 1000-1010
-        block_monitoring = await _read_block(REG_STATUS, 48)                # 2000-2047
-        block_efficiency = await _read_block(REG_EFFICIENCY, 8)             # 2201-2208
-        block_filters_dirty = await _read_block(REG_OUTDOOR_FILTER_DIRTY, 2)# 2852-2853
+        # Polling register blocks with 300ms delays to respect controller limits
+        block_on_off = await _read_block(REG_ON_OFF, 1)
+        await asyncio.sleep(0.3)
+        block_modes = await _read_block(100, 29)
+        await asyncio.sleep(0.3)
+        block_override = await _read_block(REG_OVERRIDE_ENABLE, 9)
+        await asyncio.sleep(0.3)
+        
+        # Split Heaters
+        heater_water = await _read_block(REG_WATER_HEATER, 1)
+        await asyncio.sleep(0.3)
+        heater_cooler = await _read_block(REG_WATER_COOLER, 1)
+        await asyncio.sleep(0.3)
+        heater_electric = await _read_block(REG_ELECTRIC_HEATER, 1)
+        await asyncio.sleep(0.3)
+        
+        block_alarms = await _read_block(REG_ALARM_COUNT, 11)
+        await asyncio.sleep(0.3)
+        
+        # Split Monitoring (Block 6) into safe chunks
+        block_mon_1 = await _read_block(2000, 24)       # 2000-2023
+        await asyncio.sleep(0.3)
+        block_mon_2 = await _read_block(2032, 2)        # 2032-2033
+        await asyncio.sleep(0.3)
+        block_mon_flow_sp = await _read_block(2036, 4)  # 2036-2039
+        await asyncio.sleep(0.3)
+        block_mon_3 = await _read_block(2040, 1)        # 2040
+        await asyncio.sleep(0.3)
+        block_mon_4 = await _read_block(2045, 1)        # 2045
+        await asyncio.sleep(0.3)
+        
+        block_efficiency = await _read_block(REG_EFFICIENCY, 8)
+        await asyncio.sleep(0.3)
+        
+        # Split Filters
+        filter_outdoor = await _read_block(REG_OUTDOOR_FILTER_DIRTY, 1)
+        await asyncio.sleep(0.3)
+        filter_extract = await _read_block(REG_EXTRACT_FILTER_DIRTY, 1)
 
         # Validate critical blocks
-        if block_on_off is None or block_monitoring is None:
+        if block_on_off is None or block_mon_1 is None:
             _LOGGER.error("Could not read critical Modbus registers from Komfovent C5")
-            # Close connection to force reconnection attempt on next poll
             self.client.close()
             raise UpdateFailed("Critical Modbus data blocks could not be read")
 
@@ -188,45 +215,50 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             raw_data[REG_DEMAND_CONTROL] = block_override[5]
             raw_data[REG_RECIRC_CONTROL] = block_override[7]
 
-        # Parse Block 4 (Heaters & Coolers)
-        if block_heaters:
-            raw_data[REG_WATER_HEATER] = block_heaters[0]
-            raw_data[REG_WATER_COOLER] = block_heaters[1]
-            raw_data[REG_ELECTRIC_HEATER] = block_heaters[2]
+        # Parse Block 4 (Heaters & Coolers) safely
+        if heater_water: raw_data[REG_WATER_HEATER] = heater_water[0]
+        if heater_cooler: raw_data[REG_WATER_COOLER] = heater_cooler[0]
+        if heater_electric: raw_data[REG_ELECTRIC_HEATER] = heater_electric[0]
 
         # Parse Block 5 (Alarms)
         if block_alarms:
             raw_data[REG_ALARM_COUNT] = block_alarms[0]
             raw_data["alarm_codes"] = [code for code in block_alarms[1:] if code != 0]
 
-        # Parse Block 6 (Monitoring Data)
-        raw_data[REG_STATUS] = block_monitoring[0]
-        raw_data[REG_CURRENT_MODE] = block_monitoring[1]
-        raw_data[REG_CURRENT_SUPPLY_FLOW] = decode_32bit(block_monitoring[2], block_monitoring[3])
-        raw_data[REG_CURRENT_EXHAUST_FLOW] = decode_32bit(block_monitoring[4], block_monitoring[5])
-        raw_data[REG_SUPPLY_TEMP] = to_signed_16(block_monitoring[6]) / 10.0
-        raw_data[REG_EXTRACT_TEMP] = to_signed_16(block_monitoring[7]) / 10.0
-        raw_data[REG_OUTDOOR_TEMP] = to_signed_16(block_monitoring[8]) / 10.0
-        raw_data[REG_EXHAUST_TEMP] = to_signed_16(block_monitoring[9]) / 10.0
-        raw_data[REG_RETURN_WATER_TEMP] = to_signed_16(block_monitoring[10]) / 10.0
-        raw_data[REG_SUPPLY_PRESSURE] = block_monitoring[11]
-        raw_data[REG_EXTRACT_PRESSURE] = block_monitoring[12]
-        raw_data[REG_AIR_QUALITY_TYPE] = block_monitoring[13]
-        raw_data[REG_AIR_QUALITY_LEVEL] = block_monitoring[14]
-        raw_data[REG_SUPPLY_HUMIDITY] = block_monitoring[15] / 10.0
-        raw_data[REG_WATER_HEATER_LEVEL] = block_monitoring[16] / 10.0
-        raw_data[REG_WATER_COOLER_LEVEL] = block_monitoring[17] / 10.0
-        raw_data[REG_HUMIDITY_CONTROL_LEVEL] = block_monitoring[18] / 10.0
-        raw_data[REG_HEAT_EXCHANGER_LEVEL] = block_monitoring[19] / 10.0
-        raw_data[REG_RECIRCULATION_LEVEL] = block_monitoring[20] / 10.0
-        raw_data[REG_SUPPLY_FAN_LEVEL] = block_monitoring[21] / 10.0
-        raw_data[REG_EXHAUST_FAN_LEVEL] = block_monitoring[22] / 10.0
-        raw_data[REG_TEMP_SETPOINT] = to_signed_16(block_monitoring[32]) / 10.0
-        raw_data[REG_SUPPLY_TEMP_SETPOINT] = to_signed_16(block_monitoring[33]) / 10.0
-        raw_data[REG_SUPPLY_FLOW_SETPOINT] = decode_32bit(block_monitoring[36], block_monitoring[37])
-        raw_data[REG_EXTRACT_FLOW_SETPOINT] = decode_32bit(block_monitoring[38], block_monitoring[39])
-        raw_data[REG_INTERNAL_SUPPLY_TEMP] = to_signed_16(block_monitoring[40]) / 10.0
-        raw_data[REG_ALARM_DOUT] = block_monitoring[45]
+        # Parse Block 6 (Monitoring Data Chunks)
+        if block_mon_1:
+            raw_data[REG_STATUS] = block_mon_1[0]
+            raw_data[REG_CURRENT_MODE] = block_mon_1[1]
+            raw_data[REG_CURRENT_SUPPLY_FLOW] = decode_32bit(block_mon_1[2], block_mon_1[3])
+            raw_data[REG_CURRENT_EXHAUST_FLOW] = decode_32bit(block_mon_1[4], block_mon_1[5])
+            raw_data[REG_SUPPLY_TEMP] = to_signed_16(block_mon_1[6]) / 10.0
+            raw_data[REG_EXTRACT_TEMP] = to_signed_16(block_mon_1[7]) / 10.0
+            raw_data[REG_OUTDOOR_TEMP] = to_signed_16(block_mon_1[8]) / 10.0
+            raw_data[REG_EXHAUST_TEMP] = to_signed_16(block_mon_1[9]) / 10.0
+            raw_data[REG_RETURN_WATER_TEMP] = to_signed_16(block_mon_1[10]) / 10.0
+            raw_data[REG_SUPPLY_PRESSURE] = block_mon_1[11]
+            raw_data[REG_EXTRACT_PRESSURE] = block_mon_1[12]
+            raw_data[REG_AIR_QUALITY_TYPE] = block_mon_1[13]
+            raw_data[REG_AIR_QUALITY_LEVEL] = block_mon_1[14]
+            raw_data[REG_SUPPLY_HUMIDITY] = block_mon_1[15] / 10.0
+            raw_data[REG_WATER_HEATER_LEVEL] = block_mon_1[16] / 10.0
+            raw_data[REG_WATER_COOLER_LEVEL] = block_mon_1[17] / 10.0
+            raw_data[REG_HUMIDITY_CONTROL_LEVEL] = block_mon_1[18] / 10.0
+            raw_data[REG_HEAT_EXCHANGER_LEVEL] = block_mon_1[19] / 10.0
+            raw_data[REG_RECIRCULATION_LEVEL] = block_mon_1[20] / 10.0
+            raw_data[REG_SUPPLY_FAN_LEVEL] = block_mon_1[21] / 10.0
+            raw_data[REG_EXHAUST_FAN_LEVEL] = block_mon_1[22] / 10.0
+
+        if block_mon_2:
+            raw_data[REG_TEMP_SETPOINT] = to_signed_16(block_mon_2[0]) / 10.0
+            raw_data[REG_SUPPLY_TEMP_SETPOINT] = to_signed_16(block_mon_2[1]) / 10.0
+
+        if block_mon_flow_sp:
+            raw_data[REG_SUPPLY_FLOW_SETPOINT] = decode_32bit(block_mon_flow_sp[0], block_mon_flow_sp[1])
+            raw_data[REG_EXTRACT_FLOW_SETPOINT] = decode_32bit(block_mon_flow_sp[2], block_mon_flow_sp[3])
+
+        if block_mon_3: raw_data[REG_INTERNAL_SUPPLY_TEMP] = to_signed_16(block_mon_3[0]) / 10.0
+        if block_mon_4: raw_data[REG_ALARM_DOUT] = block_mon_4[0]
 
         # Parse Block 7 (Efficiency & SFP)
         if block_efficiency:
@@ -238,26 +270,34 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             raw_data[REG_OUTDOOR_FILTER_IMPURITY] = block_efficiency[6]
             raw_data[REG_EXTRACT_FILTER_IMPURITY] = block_efficiency[7]
 
-        # Parse Block 8 (Filters Dirty Binary flags)
-        if block_filters_dirty:
-            raw_data[REG_OUTDOOR_FILTER_DIRTY] = block_filters_dirty[0]
-            raw_data[REG_EXTRACT_FILTER_DIRTY] = block_filters_dirty[1]
+        # Parse Block 8 (Filters Dirty Binary flags) safely
+        if filter_outdoor: raw_data[REG_OUTDOOR_FILTER_DIRTY] = filter_outdoor[0]
+        if filter_extract: raw_data[REG_EXTRACT_FILTER_DIRTY] = filter_extract[0]
 
         return raw_data
 
     async def async_write_register(self, address: int, value: int) -> None:
         """Write a value to a Modbus register."""
-        _LOGGER.debug("Writing Modbus register %s = %s", address, value)
+        wire_address = address - 1  # 0-indexing translation
+        _LOGGER.debug("Writing Modbus register %s (wire %s) = %s", address, wire_address, value)
         if not self.client.connected:
             await self.client.connect()
+            
         try:
-            try:
-                await self.client.write_register(address, value, slave=self.slave_id)
-            except TypeError:
-                await self.client.write_register(address, value, unit=self.slave_id)
+            sig = inspect.signature(self.client.write_register)
+            kwargs = {}
+            
+            if 'device_id' in sig.parameters: kwargs['device_id'] = self.slave_id
+            elif 'slave' in sig.parameters: kwargs['slave'] = self.slave_id
+            elif 'unit' in sig.parameters: kwargs['unit'] = self.slave_id
+            else: kwargs['slave'] = self.slave_id
+            
+            result = self.client.write_register(wire_address, value, **kwargs)
+            if inspect.isawaitable(result):
+                await result
+                
         except Exception as err:
             _LOGGER.error("Failed to write Modbus register %s: %s", address, err)
             raise
         finally:
-            # Refresh data to display written changes
             self.hass.async_create_task(self.async_request_refresh())
