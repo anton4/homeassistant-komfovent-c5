@@ -24,7 +24,9 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     slave_id = data[CONF_SLAVE_ID]
 
     _LOGGER.debug("Validating connection to %s:%s with slave ID %s", host, port, slave_id)
-    client = AsyncModbusTcpClient(host=host, port=port)
+    
+    # ADDED TIMEOUT HERE to match your working YAML config
+    client = AsyncModbusTcpClient(host=host, port=port, timeout=5.0)
     
     try:
         connected = await client.connect()
