@@ -54,7 +54,10 @@ from .const import (
     REG_RECIRC_CONTROL,
     REG_RECIRCULATION_LEVEL,
     REG_RETURN_WATER_TEMP,
+    REG_RTC_DATE,
+    REG_RTC_SECONDS,
     REG_RTC_TIME,
+    REG_RTC_YEAR,
     REG_SPECIAL_EXTRACT_FLOW,
     REG_SPECIAL_SUPPLY_FLOW,
     REG_SPECIAL_TEMP,
@@ -153,8 +156,8 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
                 _LOGGER.debug("Exception reading Modbus block starting at %s: %s", address, err)
                 return None
 
-        # Clock
-        block_rtc = await _read_block(REG_RTC_TIME, 3)
+        # Clock (Read 5 registers: 450 to 454)
+        block_rtc = await _read_block(REG_RTC_TIME, 5)
         await asyncio.sleep(0.3)
         
         # General Status
@@ -208,11 +211,15 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
         if block_rtc:
             hour = (block_rtc[0] >> 8) & 0xFF
             minute = block_rtc[0] & 0xFF
-            year = block_rtc[1]
-            month = (block_rtc[2] >> 8) & 0xFF
-            day = block_rtc[2] & 0xFF
+            month = (block_rtc[3] >> 8) & 0xFF
+            day = block_rtc[3] & 0xFF
+            year = block_rtc[4]
             if 2000 <= year <= 2100 and 1 <= month <= 12 and 1 <= day <= 31 and 0 <= hour <= 23 and 0 <= minute <= 59:
                 raw_data["rtc_time"] = f"{year}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}"
+                # Store exact date pieces for the smart sync comparison later
+                raw_data["rtc_year"] = year
+                raw_data["rtc_month"] = month
+                raw_data["rtc_day"] = day
 
         # Parse Block 1 (On/Off)
         raw_data[REG_ON_OFF] = block_on_off[0]
@@ -291,7 +298,6 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
 
         # Parse Block 7 (Efficiency & SFP)
         if block_efficiency:
-            # Fallback for 255 (controller inactive) set cleanly to 0
             raw_data[REG_EFFICIENCY] = 0 if block_efficiency[0] == 255 else block_efficiency[0]
             raw_data[REG_ENERGY_SAVING] = 0 if block_efficiency[1] == 255 else block_efficiency[1]
             raw_data[REG_EXCHANGER_RECOVERY] = block_efficiency[2]
@@ -329,7 +335,7 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             self.hass.async_create_task(self.async_request_refresh())
 
     async def async_write_registers(self, address: int, values: list[int]) -> None:
-        """Write multiple values to Modbus registers (used for 32-bit data and RTC)."""
+        """Write multiple values to Modbus registers."""
         wire_address = address - 1  
         _LOGGER.debug("Writing Modbus registers %s (wire %s) = %s", address, wire_address, values)
         if not self.client.connected:
@@ -351,16 +357,33 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             self.hass.async_create_task(self.async_request_refresh())
 
     async def async_sync_time(self) -> None:
-        """Sync the controller's clock with Home Assistant's local time."""
+        """Smart sync the controller's clock with Home Assistant's local time."""
         now = datetime.now()
         
-        # Register 29: HH:MM (MSB: Hour, LSB: Minute)
+        # Always write Time and Seconds
         time_reg = (now.hour << 8) | now.minute
-        # Register 30: Year (e.g., 2026)
-        year_reg = now.year
-        # Register 31: MM:DD (MSB: Month, LSB: Day)
-        date_reg = (now.month << 8) | now.day
+        sec_reg = now.second
         
-        _LOGGER.info("Syncing Komfovent RTC to: %s", now.strftime("%Y-%m-%d %H:%M"))
-        # Writes directly to 29, 30, and 31 simultaneously
-        await self.async_write_registers(REG_RTC_TIME, [time_reg, year_reg, date_reg])
+        _LOGGER.info("Syncing Komfovent RTC Time to: %02d:%02d:%02d", now.hour, now.minute, now.second)
+        await self.async_write_register(REG_RTC_TIME, time_reg)
+        await asyncio.sleep(0.1)
+        await self.async_write_register(REG_RTC_SECONDS, sec_reg)
+
+        # Smart Check: Fetch current date from our last poll
+        current_data = self.data or {}
+        c_year = current_data.get("rtc_year")
+        c_month = current_data.get("rtc_month")
+        c_day = current_data.get("rtc_day")
+
+        # Only push Year and Date registers if they are out of sync
+        if c_year != now.year or c_month != now.month or c_day != now.day:
+            _LOGGER.info("Syncing Komfovent RTC Date to: %04d-%02d-%02d", now.year, now.month, now.day)
+            date_reg = (now.month << 8) | now.day
+            year_reg = now.year
+            
+            await asyncio.sleep(0.1)
+            await self.async_write_register(REG_RTC_DATE, date_reg)
+            await asyncio.sleep(0.1)
+            await self.async_write_register(REG_RTC_YEAR, year_reg)
+        else:
+            _LOGGER.debug("Komfovent RTC date is already correct, skipping date/year update.")

@@ -8,7 +8,6 @@ DEFAULT_SCAN_INTERVAL = 30
 
 CONF_SLAVE_ID = "slave_id"
 
-# Added NUMBER and BUTTON platforms
 PLATFORMS = [Platform.CLIMATE, Platform.NUMBER, Platform.BUTTON, Platform.SENSOR, Platform.SWITCH]
 
 # Modbus registers map (C5 controller)
@@ -16,10 +15,11 @@ PLATFORMS = [Platform.CLIMATE, Platform.NUMBER, Platform.BUTTON, Platform.SENSOR
 REG_ON_OFF = 1                  # 0: Off, 1: On
 REG_MODE_SELECT = 100           # 1: Comfort1, 2: Comfort2, 3: Economy1, 4: Economy2, 5: Special, 6: Program
 
-# Master Clock (RTC) Registers (Shared with C6)
-REG_RTC_TIME = 29               # MSB=Hour, LSB=Minute
-REG_RTC_YEAR = 30               # Year (e.g., 2026)
-REG_RTC_DATE = 31               # MSB=Month, LSB=Day
+# Master Clock (RTC) Registers (C5)
+REG_RTC_TIME = 450              # MSB=Hour, LSB=Minute
+REG_RTC_SECONDS = 451           # 0-59
+REG_RTC_DATE = 453              # MSB=Month, LSB=Day
+REG_RTC_YEAR = 454              # Year (e.g., 2026)
 
 # Preset target temperatures
 REG_COMFORT1_TEMP = 105         # x10
@@ -123,7 +123,6 @@ REG_TO_PRESET = {
     6: PRESET_PROGRAM,
 }
 
-# Mapping of current mode to setpoint register
 MODE_TO_SETPOINT_REG = {
     1: REG_COMFORT1_TEMP,
     2: REG_COMFORT2_TEMP,
