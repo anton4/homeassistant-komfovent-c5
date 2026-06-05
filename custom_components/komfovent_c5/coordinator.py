@@ -291,8 +291,9 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
 
         # Parse Block 7 (Efficiency & SFP)
         if block_efficiency:
-            raw_data[REG_EFFICIENCY] = block_efficiency[0]
-            raw_data[REG_ENERGY_SAVING] = block_efficiency[1]
+            # Fallback for 255 (controller inactive) set cleanly to 0
+            raw_data[REG_EFFICIENCY] = 0 if block_efficiency[0] == 255 else block_efficiency[0]
+            raw_data[REG_ENERGY_SAVING] = 0 if block_efficiency[1] == 255 else block_efficiency[1]
             raw_data[REG_EXCHANGER_RECOVERY] = block_efficiency[2]
             raw_data[REG_SUPPLY_SFP] = block_efficiency[4] / 100.0
             raw_data[REG_EXHAUST_SFP] = block_efficiency[5] / 100.0
