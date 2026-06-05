@@ -156,6 +156,11 @@ SENSORS: tuple[KomfoventSensorEntityDescription, ...] = (
         }.get(val, f"Unknown ({val})"),
     ),
     KomfoventSensorEntityDescription(
+        key="rtc_time",
+        name="Controller Clock Time",
+        icon="mdi:clock-outline",
+    ),
+    KomfoventSensorEntityDescription(
         key=REG_CURRENT_MODE,
         name="Current Mode",
         value_fn=lambda val: {

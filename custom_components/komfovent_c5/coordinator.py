@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from pymodbus.client import AsyncModbusTcpClient
@@ -19,7 +19,6 @@ from .const import (
     REG_AIR_QUALITY_TYPE,
     REG_ALARM_COUNT,
     REG_ALARM_DOUT,
-    REG_ALARM_START,
     REG_COMFORT1_TEMP,
     REG_COMFORT2_TEMP,
     REG_CURRENT_EXHAUST_FLOW,
@@ -30,6 +29,7 @@ from .const import (
     REG_ECONOMY2_TEMP,
     REG_EFFICIENCY,
     REG_ELECTRIC_HEATER,
+    REG_ELECTRIC_HEATER_LEVEL,
     REG_ENERGY_SAVING,
     REG_EXCHANGER_RECOVERY,
     REG_EXHAUST_FAN_LEVEL,
@@ -54,6 +54,9 @@ from .const import (
     REG_RECIRC_CONTROL,
     REG_RECIRCULATION_LEVEL,
     REG_RETURN_WATER_TEMP,
+    REG_RTC_TIME,
+    REG_SPECIAL_EXTRACT_FLOW,
+    REG_SPECIAL_SUPPLY_FLOW,
     REG_SPECIAL_TEMP,
     REG_STATUS,
     REG_SUMMER_COOLING,
@@ -81,8 +84,12 @@ def to_signed_16(val: int) -> int:
     return val
 
 def decode_32bit(reg_high: int, reg_low: int) -> int:
-    """Decode two 16-bit registers into a 32-bit integer (big-endian word order)."""
+    """Decode two 16-bit registers into a 32-bit integer."""
     return (reg_high << 16) + reg_low
+
+def encode_32bit(val: int) -> list[int]:
+    """Encode a 32-bit integer into two 16-bit registers (big-endian)."""
+    return [(val >> 16) & 0xFFFF, val & 0xFFFF]
 
 class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
     """Class to manage fetching data from Komfovent C5 unit via Modbus."""
@@ -98,8 +105,6 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
         """Initialize the coordinator."""
         self.client = AsyncModbusTcpClient(host=host, port=port, timeout=5.0)
         self.slave_id = slave_id
-        
-        # Add these two lines to save the connection details safely
         self.host = host
         self.port = port
         
@@ -123,13 +128,11 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
 
         raw_data: dict[int | str, Any] = {}
 
-        # Helper method to read registers handling pymodbus versions and 0-indexing
         async def _read_block(address: int, count: int) -> list[int] | None:
             wire_address = address - 1  # 0-indexing translation
             try:
                 sig = inspect.signature(self.client.read_holding_registers)
                 kwargs = {}
-                
                 if 'device_id' in sig.parameters: kwargs['device_id'] = self.slave_id
                 elif 'slave' in sig.parameters: kwargs['slave'] = self.slave_id
                 elif 'unit' in sig.parameters: kwargs['unit'] = self.slave_id
@@ -143,7 +146,6 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
                     result = await result
                 
                 if result.isError():
-                    # We expect some blocks (like missing heaters) to return errors, log as debug to avoid spam
                     _LOGGER.debug("Modbus read returned error at address %s: %s", address, result)
                     return None
                 return result.registers
@@ -151,7 +153,11 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
                 _LOGGER.debug("Exception reading Modbus block starting at %s: %s", address, err)
                 return None
 
-        # Polling register blocks with 300ms delays to respect controller limits
+        # Clock
+        block_rtc = await _read_block(REG_RTC_TIME, 3)
+        await asyncio.sleep(0.3)
+        
+        # General Status
         block_on_off = await _read_block(REG_ON_OFF, 1)
         await asyncio.sleep(0.3)
         block_modes = await _read_block(100, 29)
@@ -170,16 +176,18 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
         block_alarms = await _read_block(REG_ALARM_COUNT, 11)
         await asyncio.sleep(0.3)
         
-        # Split Monitoring (Block 6) into safe chunks
-        block_mon_1 = await _read_block(2000, 24)       # 2000-2023
+        # Split Monitoring
+        block_mon_1 = await _read_block(2000, 24)       
         await asyncio.sleep(0.3)
-        block_mon_2 = await _read_block(2032, 2)        # 2032-2033
+        block_elec_heater_level = await _read_block(REG_ELECTRIC_HEATER_LEVEL, 1)
         await asyncio.sleep(0.3)
-        block_mon_flow_sp = await _read_block(2036, 4)  # 2036-2039
+        block_mon_2 = await _read_block(2032, 2)        
         await asyncio.sleep(0.3)
-        block_mon_3 = await _read_block(2040, 1)        # 2040
+        block_mon_flow_sp = await _read_block(2036, 4)  
         await asyncio.sleep(0.3)
-        block_mon_4 = await _read_block(2045, 1)        # 2045
+        block_mon_3 = await _read_block(2040, 1)        
+        await asyncio.sleep(0.3)
+        block_mon_4 = await _read_block(2045, 1)        
         await asyncio.sleep(0.3)
         
         block_efficiency = await _read_block(REG_EFFICIENCY, 8)
@@ -196,17 +204,31 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             self.client.close()
             raise UpdateFailed("Critical Modbus data blocks could not be read")
 
+        # Parse RTC Time
+        if block_rtc:
+            hour = (block_rtc[0] >> 8) & 0xFF
+            minute = block_rtc[0] & 0xFF
+            year = block_rtc[1]
+            month = (block_rtc[2] >> 8) & 0xFF
+            day = block_rtc[2] & 0xFF
+            if 2000 <= year <= 2100 and 1 <= month <= 12 and 1 <= day <= 31 and 0 <= hour <= 23 and 0 <= minute <= 59:
+                raw_data["rtc_time"] = f"{year}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}"
+
         # Parse Block 1 (On/Off)
         raw_data[REG_ON_OFF] = block_on_off[0]
 
         # Parse Block 2 (Modes/Setpoints)
         if block_modes:
-            raw_data[100] = block_modes[0]  # REG_MODE_SELECT
+            raw_data[100] = block_modes[0]  
             raw_data[REG_COMFORT1_TEMP] = block_modes[5]
             raw_data[REG_COMFORT2_TEMP] = block_modes[10]
             raw_data[REG_ECONOMY1_TEMP] = block_modes[15]
             raw_data[REG_ECONOMY2_TEMP] = block_modes[20]
+            
+            raw_data[REG_SPECIAL_SUPPLY_FLOW] = decode_32bit(block_modes[21], block_modes[22])
+            raw_data[REG_SPECIAL_EXTRACT_FLOW] = decode_32bit(block_modes[23], block_modes[24])
             raw_data[REG_SPECIAL_TEMP] = block_modes[25]
+            
             raw_data[REG_FLOW_CONTROL_MODE] = block_modes[27]
             raw_data[REG_TEMP_CONTROL_MODE] = block_modes[28]
 
@@ -253,6 +275,9 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             raw_data[REG_SUPPLY_FAN_LEVEL] = block_mon_1[21] / 10.0
             raw_data[REG_EXHAUST_FAN_LEVEL] = block_mon_1[22] / 10.0
 
+        if block_elec_heater_level: 
+            raw_data[REG_ELECTRIC_HEATER_LEVEL] = block_elec_heater_level[0] / 10.0
+
         if block_mon_2:
             raw_data[REG_TEMP_SETPOINT] = to_signed_16(block_mon_2[0]) / 10.0
             raw_data[REG_SUPPLY_TEMP_SETPOINT] = to_signed_16(block_mon_2[1]) / 10.0
@@ -266,42 +291,75 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
 
         # Parse Block 7 (Efficiency & SFP)
         if block_efficiency:
-            raw_data[REG_EFFICIENCY] = block_efficiency[0] if block_efficiency[0] != 255 else None
-            raw_data[REG_ENERGY_SAVING] = block_efficiency[1] if block_efficiency[1] != 255 else None
-            raw_data[REG_EXCHANGER_RECOVERY] = decode_32bit(block_efficiency[2], block_efficiency[3])
+            raw_data[REG_EFFICIENCY] = block_efficiency[0]
+            raw_data[REG_ENERGY_SAVING] = block_efficiency[1]
+            raw_data[REG_EXCHANGER_RECOVERY] = block_efficiency[2]
             raw_data[REG_SUPPLY_SFP] = block_efficiency[4] / 100.0
             raw_data[REG_EXHAUST_SFP] = block_efficiency[5] / 100.0
             raw_data[REG_OUTDOOR_FILTER_IMPURITY] = block_efficiency[6]
             raw_data[REG_EXTRACT_FILTER_IMPURITY] = block_efficiency[7]
 
-        # Parse Block 8 (Filters Dirty Binary flags) safely
+        # Parse Block 8 (Filters Dirty Binary flags)
         if filter_outdoor: raw_data[REG_OUTDOOR_FILTER_DIRTY] = filter_outdoor[0]
         if filter_extract: raw_data[REG_EXTRACT_FILTER_DIRTY] = filter_extract[0]
 
         return raw_data
 
     async def async_write_register(self, address: int, value: int) -> None:
-        """Write a value to a Modbus register."""
-        wire_address = address - 1  # 0-indexing translation
+        """Write a single value to a Modbus register."""
+        wire_address = address - 1  
         _LOGGER.debug("Writing Modbus register %s (wire %s) = %s", address, wire_address, value)
         if not self.client.connected:
             await self.client.connect()
-            
         try:
             sig = inspect.signature(self.client.write_register)
             kwargs = {}
-            
             if 'device_id' in sig.parameters: kwargs['device_id'] = self.slave_id
             elif 'slave' in sig.parameters: kwargs['slave'] = self.slave_id
             elif 'unit' in sig.parameters: kwargs['unit'] = self.slave_id
             else: kwargs['slave'] = self.slave_id
             
             result = self.client.write_register(wire_address, value, **kwargs)
-            if inspect.isawaitable(result):
-                await result
-                
+            if inspect.isawaitable(result): await result
         except Exception as err:
             _LOGGER.error("Failed to write Modbus register %s: %s", address, err)
             raise
         finally:
             self.hass.async_create_task(self.async_request_refresh())
+
+    async def async_write_registers(self, address: int, values: list[int]) -> None:
+        """Write multiple values to Modbus registers (used for 32-bit data and RTC)."""
+        wire_address = address - 1  
+        _LOGGER.debug("Writing Modbus registers %s (wire %s) = %s", address, wire_address, values)
+        if not self.client.connected:
+            await self.client.connect()
+        try:
+            sig = inspect.signature(self.client.write_registers)
+            kwargs = {}
+            if 'device_id' in sig.parameters: kwargs['device_id'] = self.slave_id
+            elif 'slave' in sig.parameters: kwargs['slave'] = self.slave_id
+            elif 'unit' in sig.parameters: kwargs['unit'] = self.slave_id
+            else: kwargs['slave'] = self.slave_id
+            
+            result = self.client.write_registers(wire_address, values, **kwargs)
+            if inspect.isawaitable(result): await result
+        except Exception as err:
+            _LOGGER.error("Failed to write Modbus registers %s: %s", address, err)
+            raise
+        finally:
+            self.hass.async_create_task(self.async_request_refresh())
+
+    async def async_sync_time(self) -> None:
+        """Sync the controller's clock with Home Assistant's local time."""
+        now = datetime.now()
+        
+        # Register 29: HH:MM (MSB: Hour, LSB: Minute)
+        time_reg = (now.hour << 8) | now.minute
+        # Register 30: Year (e.g., 2026)
+        year_reg = now.year
+        # Register 31: MM:DD (MSB: Month, LSB: Day)
+        date_reg = (now.month << 8) | now.day
+        
+        _LOGGER.info("Syncing Komfovent RTC to: %s", now.strftime("%Y-%m-%d %H:%M"))
+        # Writes directly to 29, 30, and 31 simultaneously
+        await self.async_write_registers(REG_RTC_TIME, [time_reg, year_reg, date_reg])

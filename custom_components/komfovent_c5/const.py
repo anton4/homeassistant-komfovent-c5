@@ -8,12 +8,18 @@ DEFAULT_SCAN_INTERVAL = 30
 
 CONF_SLAVE_ID = "slave_id"
 
-PLATFORMS = [Platform.CLIMATE, Platform.SENSOR, Platform.SWITCH]
+# Added NUMBER and BUTTON platforms
+PLATFORMS = [Platform.CLIMATE, Platform.NUMBER, Platform.BUTTON, Platform.SENSOR, Platform.SWITCH]
 
 # Modbus registers map (C5 controller)
 # Write registers (Holding registers)
 REG_ON_OFF = 1                  # 0: Off, 1: On
 REG_MODE_SELECT = 100           # 1: Comfort1, 2: Comfort2, 3: Economy1, 4: Economy2, 5: Special, 6: Program
+
+# Master Clock (RTC) Registers (Shared with C6)
+REG_RTC_TIME = 29               # MSB=Hour, LSB=Minute
+REG_RTC_YEAR = 30               # Year (e.g., 2026)
+REG_RTC_DATE = 31               # MSB=Month, LSB=Day
 
 # Preset target temperatures
 REG_COMFORT1_TEMP = 105         # x10
@@ -21,6 +27,10 @@ REG_COMFORT2_TEMP = 110         # x10
 REG_ECONOMY1_TEMP = 115         # x10
 REG_ECONOMY2_TEMP = 120         # x10
 REG_SPECIAL_TEMP = 125          # x10
+
+# Special Mode Flows (32-bit registers)
+REG_SPECIAL_SUPPLY_FLOW = 121   # 32-bit (121-122)
+REG_SPECIAL_EXTRACT_FLOW = 123  # 32-bit (123-124)
 
 REG_FLOW_CONTROL_MODE = 127     # 0: CAV, 1: VAV, 2: DCV
 REG_TEMP_CONTROL_MODE = 128     # 0: Supply, 1: Extract, 2: Room
@@ -42,13 +52,13 @@ REG_ELECTRIC_HEATER = 553       # 0: Disable, 1: Enable
 REG_ALARM_COUNT = 1000          # 0..10
 REG_ALARM_START = 1001          # 1001-1010 active alarm codes
 
-# Monitoring data (Read-only, typically read as holding registers)
+# Monitoring data
 REG_STATUS = 2000               # 0: Stop, 1: Enabled but fans stopped, 2: Running
 REG_CURRENT_MODE = 2001         # 0: Standby, 1: Comfort1, 2: Comfort2, 3: Economy1, 4: Economy2, 5: Special
 REG_CURRENT_SUPPLY_FLOW = 2002  # 32-bit (2002-2003) m3/h, m3/s, or l/s
 REG_CURRENT_EXHAUST_FLOW = 2004 # 32-bit (2004-2005) m3/h, m3/s, or l/s
 REG_SUPPLY_TEMP = 2006          # x10
-REG_EXTRACT_TEMP = 2007          # x10
+REG_EXTRACT_TEMP = 2007         # x10
 REG_OUTDOOR_TEMP = 2008         # x10
 REG_EXHAUST_TEMP = 2009         # x10
 REG_RETURN_WATER_TEMP = 2010    # x10
@@ -57,13 +67,14 @@ REG_EXTRACT_PRESSURE = 2012     # Pa
 REG_AIR_QUALITY_TYPE = 2013     # 0-CO2, 1-VOCq, 2-VOCp, 3-RH, 4-TMP
 REG_AIR_QUALITY_LEVEL = 2014    # ppm, %, etc.
 REG_SUPPLY_HUMIDITY = 2015      # x10 %
-REG_WATER_HEATER_LEVEL = 2016   # 0..1000 -> 0..100%
-REG_WATER_COOLER_LEVEL = 2017   # 0..1000 -> 0..100%
-REG_HUMIDITY_CONTROL_LEVEL = 2018 # 0..1000 -> 0..100%
-REG_HEAT_EXCHANGER_LEVEL = 2019 # 0..1000 -> 0..100%
-REG_RECIRCULATION_LEVEL = 2020  # 0..1000 -> 0..100%
-REG_SUPPLY_FAN_LEVEL = 2021     # 0..1000 -> 0..100%
-REG_EXHAUST_FAN_LEVEL = 2022    # 0..1000 -> 0..100%
+REG_WATER_HEATER_LEVEL = 2016   # 0..100%
+REG_WATER_COOLER_LEVEL = 2017   # 0..100%
+REG_HUMIDITY_CONTROL_LEVEL = 2018 # 0..100%
+REG_HEAT_EXCHANGER_LEVEL = 2019 # 0..100%
+REG_RECIRCULATION_LEVEL = 2020  # 0..100%
+REG_SUPPLY_FAN_LEVEL = 2021     # 0..100%
+REG_EXHAUST_FAN_LEVEL = 2022    # 0..100%
+REG_ELECTRIC_HEATER_LEVEL = 2025 # 0..100%
 REG_TEMP_SETPOINT = 2032        # x10 current temperature setpoint
 REG_SUPPLY_TEMP_SETPOINT = 2033 # x10 current supply temp setpoint
 REG_SUPPLY_FLOW_SETPOINT = 2036 # 32-bit (2036-2037)
@@ -119,7 +130,6 @@ MODE_TO_SETPOINT_REG = {
     3: REG_ECONOMY1_TEMP,
     4: REG_ECONOMY2_TEMP,
     5: REG_SPECIAL_TEMP,
-    # Fallback to Comfort1 for program or standby
     0: REG_COMFORT1_TEMP,
     6: REG_COMFORT1_TEMP,
 }
