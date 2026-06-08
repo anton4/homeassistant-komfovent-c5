@@ -59,7 +59,6 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     finally:
         client.close()
 
-    # Safely get CONF_NAME, defaulting to DEFAULT_NAME for the options flow where Name isn't passed
     return {"title": data.get(CONF_NAME, DEFAULT_NAME)}
 
 
@@ -72,7 +71,6 @@ class KomfoventConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> config_entries.OptionsFlow:
         """Create the options flow."""
-        # No longer passing config_entry into the handler constructor!
         return KomfoventOptionsFlowHandler()
 
     async def async_step_user(
@@ -86,6 +84,7 @@ class KomfoventConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
 
             try:
+                # We STILL validate on initial setup because nothing is connected yet
                 info = await validate_input(self.hass, user_input)
                 return self.async_create_entry(title=info["title"], data=user_input)
             except CannotConnect:
@@ -111,8 +110,6 @@ class KomfoventConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class KomfoventOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle the options flow for Komfovent C5 (Reconfiguration)."""
 
-    # __init__ method is completely removed as self.config_entry is now securely injected by HA!
-
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
@@ -120,22 +117,13 @@ class KomfoventOptionsFlowHandler(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            try:
-                # Test the new connection details
-                await validate_input(self.hass, user_input)
-                
-                # Update the original entry.data with the new settings
-                self.hass.config_entries.async_update_entry(
-                    self.config_entry, data={**self.config_entry.data, **user_input}
-                )
-                
-                # Close the options flow modal
-                return self.async_create_entry(title="", data={})
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Unexpected exception in options flow")
-                errors["base"] = "unknown"
+            # SKIPPING validate_input() here. 
+            # The background loop is already holding the socket open. We just save the data
+            # and let the __init__.py reload listener gracefully bounce the connection.
+            self.hass.config_entries.async_update_entry(
+                self.config_entry, data={**self.config_entry.data, **user_input}
+            )
+            return self.async_create_entry(title="", data={})
 
         # Pre-fill the form with the current settings from entry.data
         current_host = self.config_entry.data.get(CONF_HOST)
