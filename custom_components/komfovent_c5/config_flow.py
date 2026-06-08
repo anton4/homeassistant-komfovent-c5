@@ -72,7 +72,8 @@ class KomfoventConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> config_entries.OptionsFlow:
         """Create the options flow."""
-        return KomfoventOptionsFlowHandler(config_entry)
+        # No longer passing config_entry into the handler constructor!
+        return KomfoventOptionsFlowHandler()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -110,9 +111,7 @@ class KomfoventConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class KomfoventOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle the options flow for Komfovent C5 (Reconfiguration)."""
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
+    # __init__ method is completely removed as self.config_entry is now securely injected by HA!
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
