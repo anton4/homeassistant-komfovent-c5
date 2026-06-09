@@ -22,8 +22,10 @@ from .const import (
     REG_AIR_QUALITY_TYPE,
     REG_ALARM_COUNT,
     REG_ALARM_DOUT,
+    REG_CALIBRATE_FILTERS,
     REG_COMFORT1_TEMP,
     REG_COMFORT2_TEMP,
+    REG_COUNTERS_RESET,
     REG_CURRENT_EXHAUST_FLOW,
     REG_CURRENT_MODE,
     REG_CURRENT_SUPPLY_FLOW,
@@ -45,6 +47,7 @@ from .const import (
     REG_EXTRACT_FLOW_SETPOINT,
     REG_EXTRACT_PRESSURE,
     REG_EXTRACT_TEMP,
+    REG_FIRMWARE_VERSION,
     REG_FLOW_CONTROL_MODE,
     REG_HEAT_EXCHANGER_KWH,
     REG_HEAT_EXCHANGER_LEVEL,
@@ -64,6 +67,7 @@ from .const import (
     REG_RTC_SECONDS,
     REG_RTC_TIME,
     REG_RTC_YEAR,
+    REG_SERVICE_TIME_COUNTER,
     REG_SPECIAL_EXTRACT_FLOW,
     REG_SPECIAL_SUPPLY_FLOW,
     REG_SPECIAL_TEMP,
@@ -202,6 +206,10 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             filter_outdoor = await _read_block(REG_OUTDOOR_FILTER_DIRTY, 1)
             await asyncio.sleep(0.3)
             filter_extract = await _read_block(REG_EXTRACT_FILTER_DIRTY, 1)
+            await asyncio.sleep(0.3)
+            
+            # Read Firmware and Service Time together
+            block_service = await _read_block(REG_FIRMWARE_VERSION, 2)
 
             if block_on_off is None or block_mon_1 is None:
                 raise UpdateFailed("Critical Modbus data blocks could not be read")
@@ -312,6 +320,11 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             if filter_outdoor: raw_data[REG_OUTDOOR_FILTER_DIRTY] = filter_outdoor[0]
             if filter_extract: raw_data[REG_EXTRACT_FILTER_DIRTY] = filter_extract[0]
 
+            # Parse Service Block
+            if block_service:
+                raw_data[REG_FIRMWARE_VERSION] = block_service[0]
+                raw_data[REG_SERVICE_TIME_COUNTER] = block_service[1] / 10.0
+
             return raw_data
         except Exception as err:
             raise UpdateFailed(f"Modbus error during update: {err}") from err
@@ -392,3 +405,20 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
         await self.async_write_register(REG_EXTRACT_FILTER_DIRTY, 0)
         await asyncio.sleep(0.1)
         await self.async_write_register(REG_ALARM_COUNT, 0x99C5)
+
+    async def async_calibrate_filters(self) -> None:
+        """Trigger the clean air filters calibration process."""
+        _LOGGER.info("Starting Komfovent clean air filters calibration via Modbus...")
+        # Writing the hex value 0x99C5 (39365) to register 18002 starts the calibration routine
+        await self.async_write_register(REG_CALIBRATE_FILTERS, 0x99C5)
+
+    async def async_reset_operation_counters(self) -> None:
+        """Reset the fan and heater operation hours counters."""
+        _LOGGER.warning("Resetting Komfovent operation counters via Modbus...")
+        # 0x07C5 resets Exhaust Fan, Supply Fan, and Air Heater all at once
+        await self.async_write_register(REG_COUNTERS_RESET, 0x07C5)
+
+    async def async_reset_service_timer(self) -> None:
+        """Reset the service time counter."""
+        _LOGGER.warning("Resetting Komfovent service timer via Modbus...")
+        await self.async_write_register(REG_SERVICE_TIME_COUNTER, 0x99C5)

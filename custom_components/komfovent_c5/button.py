@@ -22,10 +22,12 @@ async def async_setup_entry(
     """Set up Komfovent C5 button entities."""
     coordinator: KomfoventCoordinator = hass.data[DOMAIN][entry.entry_id]
     
-    # Add both the Time Sync and Alarm Reset buttons
     async_add_entities([
         KomfoventSyncTimeButton(coordinator),
-        KomfoventResetAlarmsButton(coordinator)
+        KomfoventResetAlarmsButton(coordinator),
+        KomfoventCalibrateFiltersButton(coordinator),
+        KomfoventResetCountersButton(coordinator),
+        KomfoventResetServiceTimerButton(coordinator)
     ])
 
 class KomfoventSyncTimeButton(CoordinatorEntity[KomfoventCoordinator], ButtonEntity):
@@ -37,7 +39,7 @@ class KomfoventSyncTimeButton(CoordinatorEntity[KomfoventCoordinator], ButtonEnt
         
         self._attr_name = f"{coordinator.name} Sync Clock to HA"
         self._attr_unique_id = f"{coordinator.host}_sync_clock"
-        self._attr_icon = "mdi:clock-sync"
+        self._attr_icon = "mdi:update"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, coordinator.host)},
             "name": coordinator.name,
@@ -69,3 +71,62 @@ class KomfoventResetAlarmsButton(CoordinatorEntity[KomfoventCoordinator], Button
     async def async_press(self) -> None:
         """Handle the button press."""
         await self.coordinator.async_reset_alarms()
+
+class KomfoventCalibrateFiltersButton(CoordinatorEntity[KomfoventCoordinator], ButtonEntity):
+    """Button to calibrate clean air filters."""
+
+    def __init__(self, coordinator: KomfoventCoordinator) -> None:
+        """Initialize the button entity."""
+        super().__init__(coordinator)
+        
+        self._attr_name = f"{coordinator.name} Calibrate Clean Filters"
+        self._attr_unique_id = f"{coordinator.host}_calibrate_filters"
+        self._attr_icon = "mdi:air-filter"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, coordinator.host)},
+            "name": coordinator.name,
+            "manufacturer": "Komfovent",
+            "model": "C5 Controller",
+        }
+
+    async def async_press(self) -> None:
+        """Handle the button press."""
+        await self.coordinator.async_calibrate_filters()
+
+class KomfoventResetCountersButton(CoordinatorEntity[KomfoventCoordinator], ButtonEntity):
+    """Button to reset operation counters."""
+
+    def __init__(self, coordinator: KomfoventCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_name = f"{coordinator.name} Reset Operation Counters"
+        self._attr_unique_id = f"{coordinator.host}_reset_counters"
+        self._attr_icon = "mdi:counter"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, coordinator.host)},
+            "name": coordinator.name,
+            "manufacturer": "Komfovent",
+            "model": "C5 Controller",
+        }
+
+    async def async_press(self) -> None:
+        """Handle the button press."""
+        await self.coordinator.async_reset_operation_counters()
+
+class KomfoventResetServiceTimerButton(CoordinatorEntity[KomfoventCoordinator], ButtonEntity):
+    """Button to reset the service time counter."""
+
+    def __init__(self, coordinator: KomfoventCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_name = f"{coordinator.name} Reset Service Timer"
+        self._attr_unique_id = f"{coordinator.host}_reset_service_timer"
+        self._attr_icon = "mdi:wrench-clock"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, coordinator.host)},
+            "name": coordinator.name,
+            "manufacturer": "Komfovent",
+            "model": "C5 Controller",
+        }
+
+    async def async_press(self) -> None:
+        """Handle the button press."""
+        await self.coordinator.async_reset_service_timer()
