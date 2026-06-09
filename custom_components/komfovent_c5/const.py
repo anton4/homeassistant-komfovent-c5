@@ -105,6 +105,12 @@ REG_AIR_HEATER_KWH = 2222       # 32-bit (2222-2223) kWh
 REG_OUTDOOR_FILTER_DIRTY = 2852 # 0: Clean, 1: Dirty
 REG_EXTRACT_FILTER_DIRTY = 2853 # 0: Clean, 1: Dirty
 
+# Service registers
+REG_CALIBRATE_FILTERS = 18002    # Write 0x99C5 to start calibration
+REG_COUNTERS_RESET = 18003       # Write 0x07C5 to reset fans and heater
+REG_FIRMWARE_VERSION = 18004     # 0..9999
+REG_SERVICE_TIME_COUNTER = 18005 # 0..1000 (x10 %)
+
 # Mode mappings
 PRESET_STANDBY = "standby"
 PRESET_COMFORT1 = "comfort1"

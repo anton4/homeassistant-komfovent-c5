@@ -52,6 +52,7 @@ from .const import (
     REG_EXTRACT_FLOW_SETPOINT,
     REG_EXTRACT_PRESSURE,
     REG_EXTRACT_TEMP,
+    REG_FIRMWARE_VERSION,
     REG_HEAT_EXCHANGER_KWH,
     REG_HEAT_EXCHANGER_LEVEL,
     REG_INTERNAL_SUPPLY_TEMP,
@@ -59,6 +60,7 @@ from .const import (
     REG_OUTDOOR_FILTER_IMPURITY,
     REG_OUTDOOR_TEMP,
     REG_RETURN_WATER_TEMP,
+    REG_SERVICE_TIME_COUNTER,
     REG_STATUS,
     REG_SUPPLY_FAN_HOURS,
     REG_SUPPLY_FAN_LEVEL,
@@ -83,7 +85,6 @@ ALARM_MAP = {
     3: "VAV calibration fail",
     4: "Change outdoor air filter",
     5: "Change extract air filter",
-    # ... Add remainder of your alarms here if missing!
 }
 
 @dataclass(frozen=True, kw_only=True)
@@ -372,6 +373,19 @@ SENSORS: tuple[KomfoventSensorEntityDescription, ...] = (
         key=REG_AIR_QUALITY_LEVEL,
         name="Air Quality Level",
         state_class=SensorStateClass.MEASUREMENT,
+    ),
+    # Service and Firmware
+    KomfoventSensorEntityDescription(
+        key=REG_SERVICE_TIME_COUNTER,
+        name="Service Time Counter",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    KomfoventSensorEntityDescription(
+        key=REG_FIRMWARE_VERSION,
+        name="Firmware Version",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     # Alarms
     KomfoventSensorEntityDescription(
