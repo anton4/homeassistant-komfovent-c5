@@ -7,5 +7,5 @@
   "documentation": "https://github.com/anton4/homeassistant-komfovent-c5",
   "iot_class": "local_polling",
   "requirements": ["pymodbus>=3.0.0"],
-  "version": "2026.6.4"
+  "version": "2026.6.14"
 }
