@@ -391,13 +391,7 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
 
     async def async_reset_alarms(self) -> None:
         """Reset the controller's active alarms."""
-        _LOGGER.warning("Resetting Komfovent alarms and filter statuses via Modbus...")
+        _LOGGER.info("Sending magic hex command to reset Komfovent alarms...")
         
-        # 1. Clear the sticky filter flags first (Registers 2852 and 2853 are R/W!)
-        await self.async_write_register(REG_OUTDOOR_FILTER_DIRTY, 0)
-        await asyncio.sleep(0.1)
-        await self.async_write_register(REG_EXTRACT_FILTER_DIRTY, 0)
-        await asyncio.sleep(0.1)
-        
-        # 2. Now write 0 to the general Alarm Reset register to clear the board
-        await self.async_write_register(REG_ALARM_COUNT, 0)
+        # The manual requires writing the specific hex value 0x99C5 (39365) to reset alarms
+        await self.async_write_register(REG_ALARM_COUNT, 0x99C5)
