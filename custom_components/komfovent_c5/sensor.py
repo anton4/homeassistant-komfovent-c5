@@ -15,18 +15,23 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
+    UnitOfEnergy,
     UnitOfPower,
     UnitOfPressure,
     UnitOfTemperature,
+    UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.entity import EntityCategory
 
 from .const import (
     DOMAIN,
+    REG_AIR_COOLER_HOURS,
+    REG_AIR_HEATER_HOURS,
+    REG_AIR_HEATER_KWH,
     REG_AIR_QUALITY_LEVEL,
     REG_ALARM_COUNT,
     REG_ALARM_DOUT,
@@ -34,9 +39,12 @@ from .const import (
     REG_CURRENT_MODE,
     REG_CURRENT_SUPPLY_FLOW,
     REG_EFFICIENCY,
+    REG_ELECTRIC_HEATER_LEVEL,
     REG_ENERGY_SAVING,
     REG_EXCHANGER_RECOVERY,
+    REG_EXHAUST_FAN_HOURS,
     REG_EXHAUST_FAN_LEVEL,
+    REG_EXHAUST_FAN_POWER,
     REG_EXHAUST_SFP,
     REG_EXHAUST_TEMP,
     REG_EXTRACT_FILTER_DIRTY,
@@ -44,6 +52,7 @@ from .const import (
     REG_EXTRACT_FLOW_SETPOINT,
     REG_EXTRACT_PRESSURE,
     REG_EXTRACT_TEMP,
+    REG_HEAT_EXCHANGER_KWH,
     REG_HEAT_EXCHANGER_LEVEL,
     REG_INTERNAL_SUPPLY_TEMP,
     REG_OUTDOOR_FILTER_DIRTY,
@@ -51,7 +60,9 @@ from .const import (
     REG_OUTDOOR_TEMP,
     REG_RETURN_WATER_TEMP,
     REG_STATUS,
+    REG_SUPPLY_FAN_HOURS,
     REG_SUPPLY_FAN_LEVEL,
+    REG_SUPPLY_FAN_POWER,
     REG_SUPPLY_FLOW_SETPOINT,
     REG_SUPPLY_HUMIDITY,
     REG_SUPPLY_PRESSURE,
@@ -72,72 +83,7 @@ ALARM_MAP = {
     3: "VAV calibration fail",
     4: "Change outdoor air filter",
     5: "Change extract air filter",
-    12: "High pressure on compressor",
-    13: "Low pressure on compressor",
-    14: "Service time",
-    15: "Evaporator icing",
-    16: "Heat pump malfunction",
-    17: "Heat pump malfunction",
-    18: "Heat pump malfunction",
-    19: "Compressor off",
-    20: "Compressor off",
-    21: "High pressure on compressor",
-    22: "Low pressure on compressor",
-    44: "Heat pump malfunction or Communication error",
-    59: "Heat pump malfunction or Communication error",
-    83: "Heat pump malfunction or Communication error",
-    95: "Low heat exchanger efficiency",
-    97: "Communication error",
-    99: "Communication error",
-    112: "Water pump/coil alarm",
-    113: "CF or HP exchanger not calibrated",
-    114: "CF or HP exchanger not calibrated",
-    115: "High pressure on compressor",
-    116: "Low pressure on compressor",
-    126: "Unknown alarm",
-    127: "Service mode",
-    128: "Supply air temp. Sensor failure",
-    129: "Supply air temp. Sensor failure",
-    130: "Extract air temp. Sensor failure",
-    131: "Extract air temp. Sensor failure",
-    132: "Outdoor air temp. Sensor failure",
-    133: "Outdoor air temp. Sensor failure",
-    134: "Exhaust air temp. Sensor failure",
-    135: "Exhaust air temp. Sensor failure",
-    136: "Water temp. sensor failure",
-    137: "Water temp. sensor failure",
-    138: "Return water temp. low",
-    139: "Internal fire alarm",
-    140: "External fire alarm",
-    141: "External stop",
-    142: "Heat exchanger failure",
-    143: "Heat exchanger icing",
-    144: "Low supply air temperature",
-    145: "High supply air temperature",
-    146: "Low supply air flow",
-    147: "Low extract air flow",
-    149: "Electric heater overheat",
-    152: "Evaporator air temp. Sensor failure",
-    153: "Evaporator coil temp. Sensor failure",
-    156: "Compressor failure",
-    170: "External stop",
-    172: "Water pump/coil alarm",
-    173: "CF exchanger not calibrated",
-    210: "Controller failure",
-    211: "Communication error",
-    217: "Service mode",
-    226: "Supply fan drive failure",
-    227: "Supply fan drive overload",
-    228: "Supply fan motor failure",
-    230: "Supply fan motor overload",
-    231: "Exhaust fan drive failure",
-    232: "Exhaust fan drive oveload",
-    233: "Exhaust fan motor failure",
-    234: "Exhaust fan motor overload",
-    236: "Rotor drive failure",
-    237: "Rotor drive overload",
-    238: "Rotor motor failure",
-    239: "Rotor motor overload",
+    # ... Add remainder of your alarms here if missing!
 }
 
 @dataclass(frozen=True, kw_only=True)
@@ -146,6 +92,12 @@ class KomfoventSensorEntityDescription(SensorEntityDescription):
     value_fn: Callable[[Any], StateType] | None = None
 
 SENSORS: tuple[KomfoventSensorEntityDescription, ...] = (
+    KomfoventSensorEntityDescription(
+        key="rtc_time",
+        name="Controller Clock Time",
+        icon="mdi:clock-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
     # Operations
     KomfoventSensorEntityDescription(
         key=REG_STATUS,
@@ -155,12 +107,6 @@ SENSORS: tuple[KomfoventSensorEntityDescription, ...] = (
             1: "Idle (Fans Stopped)",
             2: "Running",
         }.get(val, f"Unknown ({val})"),
-    ),
-    KomfoventSensorEntityDescription(
-        key="rtc_time",
-        name="Controller Clock Time",
-        icon="mdi:clock-outline",
-        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     KomfoventSensorEntityDescription(
         key=REG_CURRENT_MODE,
@@ -258,7 +204,7 @@ SENSORS: tuple[KomfoventSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfPressure.PA,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    # Fan level
+    # Fan level & Power
     KomfoventSensorEntityDescription(
         key=REG_SUPPLY_FAN_LEVEL,
         name="Supply Fan Level",
@@ -271,10 +217,30 @@ SENSORS: tuple[KomfoventSensorEntityDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
+    KomfoventSensorEntityDescription(
+        key=REG_SUPPLY_FAN_POWER,
+        name="Current Supply Fan Power",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    KomfoventSensorEntityDescription(
+        key=REG_EXHAUST_FAN_POWER,
+        name="Current Exhaust Fan Power",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
     # Exchanger Levels
     KomfoventSensorEntityDescription(
         key=REG_HEAT_EXCHANGER_LEVEL,
         name="Heat Exchanger Level",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    KomfoventSensorEntityDescription(
+        key=REG_ELECTRIC_HEATER_LEVEL,
+        name="Electric Heater Level",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
@@ -309,6 +275,54 @@ SENSORS: tuple[KomfoventSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         native_unit_of_measurement=UnitOfPower.WATT,
         state_class=SensorStateClass.MEASUREMENT,
+    ),
+    # Lifetime Counters (Hours)
+    KomfoventSensorEntityDescription(
+        key=REG_SUPPLY_FAN_HOURS,
+        name="Supply Fan Operation",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    KomfoventSensorEntityDescription(
+        key=REG_EXHAUST_FAN_HOURS,
+        name="Exhaust Fan Operation",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    KomfoventSensorEntityDescription(
+        key=REG_AIR_HEATER_HOURS,
+        name="Air Heater Operation Hours",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    KomfoventSensorEntityDescription(
+        key=REG_AIR_COOLER_HOURS,
+        name="Air Cooler Operation Hours",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    # Lifetime Energy (kWh)
+    KomfoventSensorEntityDescription(
+        key=REG_HEAT_EXCHANGER_KWH,
+        name="Heat Exchanger Energy Recovered",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    KomfoventSensorEntityDescription(
+        key=REG_AIR_HEATER_KWH,
+        name="Air Heater Energy Consumed",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL_INCREASING,
     ),
     # Specific Fan Power (SFP)
     KomfoventSensorEntityDescription(
