@@ -388,3 +388,10 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             await self.async_write_register(REG_RTC_YEAR, year_reg)
         else:
             _LOGGER.debug("Komfovent RTC date is already correct, skipping date/year update.")
+
+    async def async_reset_alarms(self) -> None:
+        """Reset the controller's active alarms."""
+        _LOGGER.info("Resetting Komfovent alarms via Modbus.")
+        # Register 1000 acts as the alarm count (read) and alarm reset (write).
+        # Writing 0 clears the active alarms in the C5 controller.
+        await self.async_write_register(REG_ALARM_COUNT, 0)
