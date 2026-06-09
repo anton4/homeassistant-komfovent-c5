@@ -68,6 +68,7 @@ from .const import (
     REG_RTC_TIME,
     REG_RTC_YEAR,
     REG_SERVICE_TIME_COUNTER,
+    REG_SPECIAL_CONFIGURATION,
     REG_SPECIAL_EXTRACT_FLOW,
     REG_SPECIAL_SUPPLY_FLOW,
     REG_SPECIAL_TEMP,
@@ -199,7 +200,6 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             block_mon_4 = await _read_block(2045, 1)        
             await asyncio.sleep(0.3)
             
-            # WIDENED TO 23 REGISTERS TO CAPTURE LIFETIME COUNTERS (2201 - 2223)
             block_efficiency = await _read_block(REG_EFFICIENCY, 23)
             await asyncio.sleep(0.3)
             
@@ -208,7 +208,6 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             filter_extract = await _read_block(REG_EXTRACT_FILTER_DIRTY, 1)
             await asyncio.sleep(0.3)
             
-            # Read Firmware and Service Time together
             block_service = await _read_block(REG_FIRMWARE_VERSION, 2)
 
             if block_on_off is None or block_mon_1 is None:
@@ -237,6 +236,7 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
                 raw_data[REG_SPECIAL_SUPPLY_FLOW] = decode_32bit(block_modes[21], block_modes[22])
                 raw_data[REG_SPECIAL_EXTRACT_FLOW] = decode_32bit(block_modes[23], block_modes[24])
                 raw_data[REG_SPECIAL_TEMP] = block_modes[25]
+                raw_data[REG_SPECIAL_CONFIGURATION] = block_modes[26]
                 raw_data[REG_FLOW_CONTROL_MODE] = block_modes[27]
                 raw_data[REG_TEMP_CONTROL_MODE] = block_modes[28]
 
@@ -293,26 +293,19 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             if block_mon_3: raw_data[REG_INTERNAL_SUPPLY_TEMP] = to_signed_16(block_mon_3[0]) / 10.0
             if block_mon_4: raw_data[REG_ALARM_DOUT] = block_mon_4[0]
 
-            # Parse Block 7 (Efficiency, SFP, and Extended Counters)
             if block_efficiency and len(block_efficiency) >= 23:
                 raw_data[REG_EFFICIENCY] = 0 if block_efficiency[0] == 255 else block_efficiency[0]
                 raw_data[REG_ENERGY_SAVING] = 0 if block_efficiency[1] == 255 else block_efficiency[1]
-                
-                # Exchanger Recovery can sometimes return 0xFFFFFFFF if unavailable
                 raw_data[REG_EXCHANGER_RECOVERY] = parse_counter(block_efficiency[2], block_efficiency[3])
-                
                 raw_data[REG_SUPPLY_SFP] = block_efficiency[4] / 100.0
                 raw_data[REG_EXHAUST_SFP] = block_efficiency[5] / 100.0
                 raw_data[REG_OUTDOOR_FILTER_IMPURITY] = block_efficiency[6]
                 raw_data[REG_EXTRACT_FILTER_IMPURITY] = block_efficiency[7]
-
-                # --- NEW COUNTERS ---
                 raw_data[REG_AIR_HEATER_HOURS] = parse_counter(block_efficiency[8], block_efficiency[9])
                 raw_data[REG_SUPPLY_FAN_HOURS] = parse_counter(block_efficiency[10], block_efficiency[11])
                 raw_data[REG_EXHAUST_FAN_HOURS] = parse_counter(block_efficiency[12], block_efficiency[13])
                 raw_data[REG_SUPPLY_FAN_POWER] = block_efficiency[14]
                 raw_data[REG_EXHAUST_FAN_POWER] = block_efficiency[15]
-                # Index 16 is Active Functions (omitted per user scope)
                 raw_data[REG_AIR_COOLER_HOURS] = parse_counter(block_efficiency[17], block_efficiency[18])
                 raw_data[REG_HEAT_EXCHANGER_KWH] = parse_counter(block_efficiency[19], block_efficiency[20])
                 raw_data[REG_AIR_HEATER_KWH] = parse_counter(block_efficiency[21], block_efficiency[22])
@@ -320,7 +313,6 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             if filter_outdoor: raw_data[REG_OUTDOOR_FILTER_DIRTY] = filter_outdoor[0]
             if filter_extract: raw_data[REG_EXTRACT_FILTER_DIRTY] = filter_extract[0]
 
-            # Parse Service Block
             if block_service:
                 raw_data[REG_FIRMWARE_VERSION] = block_service[0]
                 raw_data[REG_SERVICE_TIME_COUNTER] = block_service[1] / 10.0
@@ -409,16 +401,26 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
     async def async_calibrate_filters(self) -> None:
         """Trigger the clean air filters calibration process."""
         _LOGGER.info("Starting Komfovent clean air filters calibration via Modbus...")
-        # Writing the hex value 0x99C5 (39365) to register 18002 starts the calibration routine
         await self.async_write_register(REG_CALIBRATE_FILTERS, 0x99C5)
 
     async def async_reset_operation_counters(self) -> None:
         """Reset the fan and heater operation hours counters."""
         _LOGGER.warning("Resetting Komfovent operation counters via Modbus...")
-        # 0x07C5 resets Exhaust Fan, Supply Fan, and Air Heater all at once
         await self.async_write_register(REG_COUNTERS_RESET, 0x07C5)
 
     async def async_reset_service_timer(self) -> None:
         """Reset the service time counter."""
         _LOGGER.warning("Resetting Komfovent service timer via Modbus...")
         await self.async_write_register(REG_SERVICE_TIME_COUNTER, 0x99C5)
+
+    async def async_set_special_config_bit(self, bit: int, enable: bool) -> None:
+        """Set or clear a specific bit in the Special Configuration register."""
+        # Use 31 (all enabled) as default if data hasn't loaded yet
+        current_val = self.data.get(REG_SPECIAL_CONFIGURATION, 31)
+        if enable:
+            new_val = current_val | (1 << bit)
+        else:
+            new_val = current_val & ~(1 << bit)
+            
+        _LOGGER.info("Setting Komfovent Special Config bit %s to %s (New Value: %s)", bit, enable, new_val)
+        await self.async_write_register(REG_SPECIAL_CONFIGURATION, new_val)

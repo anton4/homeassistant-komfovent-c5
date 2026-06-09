@@ -8,7 +8,7 @@ DEFAULT_SCAN_INTERVAL = 30
 
 CONF_SLAVE_ID = "slave_id"
 
-PLATFORMS = [Platform.CLIMATE, Platform.NUMBER, Platform.BUTTON, Platform.SENSOR, Platform.SWITCH]
+PLATFORMS = [Platform.CLIMATE, Platform.NUMBER, Platform.BUTTON, Platform.SENSOR, Platform.SWITCH, Platform.SELECT]
 
 # Modbus registers map (C5 controller)
 # Write registers (Holding registers)
@@ -28,9 +28,10 @@ REG_ECONOMY1_TEMP = 115         # x10
 REG_ECONOMY2_TEMP = 120         # x10
 REG_SPECIAL_TEMP = 125          # x10
 
-# Special Mode Flows (32-bit registers)
+# Special Mode Configuration
 REG_SPECIAL_SUPPLY_FLOW = 121   # 32-bit (121-122)
 REG_SPECIAL_EXTRACT_FLOW = 123  # 32-bit (123-124)
+REG_SPECIAL_CONFIGURATION = 126 # Bitmask (b0-Heating, b1-Cooling, b2-Recirc, b3-Hum, b4-Dehum)
 
 REG_FLOW_CONTROL_MODE = 127     # 0: CAV, 1: VAV, 2: DCV
 REG_TEMP_CONTROL_MODE = 128     # 0: Supply, 1: Extract, 2: Room
