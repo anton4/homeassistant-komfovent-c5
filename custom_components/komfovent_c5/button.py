@@ -21,7 +21,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up Komfovent C5 button entities."""
     coordinator: KomfoventCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([KomfoventSyncTimeButton(coordinator)])
+    
+    # Add both the Time Sync and Alarm Reset buttons
+    async_add_entities([
+        KomfoventSyncTimeButton(coordinator),
+        KomfoventResetAlarmsButton(coordinator)
+    ])
 
 class KomfoventSyncTimeButton(CoordinatorEntity[KomfoventCoordinator], ButtonEntity):
     """Button to sync the C5 clock with Home Assistant."""
@@ -43,3 +48,24 @@ class KomfoventSyncTimeButton(CoordinatorEntity[KomfoventCoordinator], ButtonEnt
     async def async_press(self) -> None:
         """Handle the button press."""
         await self.coordinator.async_sync_time()
+
+class KomfoventResetAlarmsButton(CoordinatorEntity[KomfoventCoordinator], ButtonEntity):
+    """Button to reset alarms on the C5 controller."""
+
+    def __init__(self, coordinator: KomfoventCoordinator) -> None:
+        """Initialize the button entity."""
+        super().__init__(coordinator)
+        
+        self._attr_name = f"{coordinator.name} Reset Alarms"
+        self._attr_unique_id = f"{coordinator.host}_reset_alarms"
+        self._attr_icon = "mdi:shield-refresh"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, coordinator.host)},
+            "name": coordinator.name,
+            "manufacturer": "Komfovent",
+            "model": "C5 Controller",
+        }
+
+    async def async_press(self) -> None:
+        """Handle the button press."""
+        await self.coordinator.async_reset_alarms()
