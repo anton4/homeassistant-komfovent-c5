@@ -1,6 +1,6 @@
 # Komfovent C5 Custom Integration for Home Assistant
 
-![Version](![GitHub Release](https://img.shields.io/github/v/release/anton4/homeassistant-komfovent-c5))
+[![GitHub Release](https://img.shields.io/github/v/release/anton4/homeassistant-komfovent-c5)](https://github.com/anton4/homeassistant-komfovent-c5/releases)
 ![HACS Support](https://img.shields.io/badge/HACS-Custom-orange.svg)
 
 A robust, local-polling Home Assistant custom component to monitor and control **Komfovent** ventilation units equipped with the **C5 Controller** via **Modbus TCP**.
