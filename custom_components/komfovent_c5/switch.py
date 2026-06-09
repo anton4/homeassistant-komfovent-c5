@@ -4,92 +4,51 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
+from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import (
-    DOMAIN,
-    REG_DEMAND_CONTROL,
-    REG_ELECTRIC_HEATER,
-    REG_OVERRIDE_ENABLE,
-    REG_RECIRC_CONTROL,
-    REG_SUMMER_COOLING,
-    REG_WATER_COOLER,
-    REG_WATER_HEATER,
-)
+from .const import DOMAIN, REG_SPECIAL_CONFIGURATION
 from .coordinator import KomfoventCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-SWITCHES: tuple[SwitchEntityDescription, ...] = (
-    SwitchEntityDescription(
-        key=REG_OVERRIDE_ENABLE,
-        name="Override Function",
-        icon="mdi:clock-fast",
-    ),
-    SwitchEntityDescription(
-        key=REG_SUMMER_COOLING,
-        name="Summer Night Cooling",
-        icon="mdi:weather-night",
-    ),
-    SwitchEntityDescription(
-        key=REG_DEMAND_CONTROL,
-        name="Operation on Demand",
-        icon="mdi:leaf",
-    ),
-    SwitchEntityDescription(
-        key=REG_RECIRC_CONTROL,
-        name="Recirculation Control",
-        icon="mdi:cached",
-    ),
-    SwitchEntityDescription(
-        key=REG_WATER_HEATER,
-        name="Water Heater Enable",
-        icon="mdi:water-heating",
-    ),
-    SwitchEntityDescription(
-        key=REG_WATER_COOLER,
-        name="Water Cooler Enable",
-        icon="mdi:snowflake",
-    ),
-    SwitchEntityDescription(
-        key=REG_ELECTRIC_HEATER,
-        name="Electric Heater Enable",
-        icon="mdi:radiator",
-    ),
-)
+# Map the bits to their corresponding names and icons
+SPECIAL_CONFIG_BITS = {
+    0: ("Special Mode: Heating Enable", "mdi:radiator"),
+    1: ("Special Mode: Cooling Enable", "mdi:snowflake"),
+    2: ("Special Mode: Recirculation Enable", "mdi:sync"),
+    3: ("Special Mode: Humidifying Enable", "mdi:water-percent"),
+    4: ("Special Mode: Dehumidifying Enable", "mdi:water-off"),
+}
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Komfovent C5 switches."""
+    """Set up Komfovent C5 switch entities."""
     coordinator: KomfoventCoordinator = hass.data[DOMAIN][entry.entry_id]
     
-    async_add_entities(
-        [KomfoventSwitch(coordinator, description) for description in SWITCHES]
-    )
+    entities = [
+        KomfoventSpecialConfigSwitch(coordinator, bit, name, icon)
+        for bit, (name, icon) in SPECIAL_CONFIG_BITS.items()
+    ]
+    
+    async_add_entities(entities)
 
-class KomfoventSwitch(CoordinatorEntity[KomfoventCoordinator], SwitchEntity):
-    """Representation of a Komfovent switch."""
+class KomfoventSpecialConfigSwitch(CoordinatorEntity[KomfoventCoordinator], SwitchEntity):
+    """Switch to control a specific feature bit in Special Mode."""
 
-    entity_description: SwitchEntityDescription
-
-    def __init__(
-        self,
-        coordinator: KomfoventCoordinator,
-        description: SwitchEntityDescription,
-    ) -> None:
+    def __init__(self, coordinator: KomfoventCoordinator, bit: int, name: str, icon: str) -> None:
         """Initialize the switch."""
         super().__init__(coordinator)
-        self.entity_description = description
-        
-        self._attr_name = f"{coordinator.name} {description.name}"
-        self._attr_unique_id = f"{coordinator.host}_{description.key}"
+        self.bit = bit
+        self._attr_name = f"{coordinator.name} {name}"
+        self._attr_unique_id = f"{coordinator.host}_special_config_bit_{bit}"
+        self._attr_icon = icon
         self._attr_device_info = {
             "identifiers": {(DOMAIN, coordinator.host)},
             "name": coordinator.name,
@@ -99,16 +58,16 @@ class KomfoventSwitch(CoordinatorEntity[KomfoventCoordinator], SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Return True if switch is on."""
-        val = self.coordinator.data.get(self.entity_description.key)
+        """Return true if the bit is set to 1."""
+        val = self.coordinator.data.get(REG_SPECIAL_CONFIGURATION)
         if val is None:
             return None
-        return val == 1
+        return bool(val & (1 << self.bit))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the switch on."""
-        await self.coordinator.async_write_register(self.entity_description.key, 1)
+        """Set the bit to 1."""
+        await self.coordinator.async_set_special_config_bit(self.bit, True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the switch off."""
-        await self.coordinator.async_write_register(self.entity_description.key, 0)
+        """Set the bit to 0."""
+        await self.coordinator.async_set_special_config_bit(self.bit, False)
