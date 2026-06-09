@@ -15,6 +15,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     CONF_SLAVE_ID,
     DOMAIN,
+    REG_AIR_COOLER_HOURS,
+    REG_AIR_HEATER_HOURS,
+    REG_AIR_HEATER_KWH,
     REG_AIR_QUALITY_LEVEL,
     REG_AIR_QUALITY_TYPE,
     REG_ALARM_COUNT,
@@ -32,7 +35,9 @@ from .const import (
     REG_ELECTRIC_HEATER_LEVEL,
     REG_ENERGY_SAVING,
     REG_EXCHANGER_RECOVERY,
+    REG_EXHAUST_FAN_HOURS,
     REG_EXHAUST_FAN_LEVEL,
+    REG_EXHAUST_FAN_POWER,
     REG_EXHAUST_SFP,
     REG_EXHAUST_TEMP,
     REG_EXTRACT_FILTER_DIRTY,
@@ -41,6 +46,7 @@ from .const import (
     REG_EXTRACT_PRESSURE,
     REG_EXTRACT_TEMP,
     REG_FLOW_CONTROL_MODE,
+    REG_HEAT_EXCHANGER_KWH,
     REG_HEAT_EXCHANGER_LEVEL,
     REG_HUMIDITY_CONTROL_LEVEL,
     REG_INTERNAL_SUPPLY_TEMP,
@@ -63,7 +69,9 @@ from .const import (
     REG_SPECIAL_TEMP,
     REG_STATUS,
     REG_SUMMER_COOLING,
+    REG_SUPPLY_FAN_HOURS,
     REG_SUPPLY_FAN_LEVEL,
+    REG_SUPPLY_FAN_POWER,
     REG_SUPPLY_FLOW_SETPOINT,
     REG_SUPPLY_HUMIDITY,
     REG_SUPPLY_PRESSURE,
@@ -81,18 +89,22 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 def to_signed_16(val: int) -> int:
-    """Convert unsigned 16-bit int to signed 16-bit int."""
     if val >= 0x8000:
         return val - 0x10000
     return val
 
 def decode_32bit(reg_high: int, reg_low: int) -> int:
-    """Decode two 16-bit registers into a 32-bit integer."""
     return (reg_high << 16) + reg_low
 
 def encode_32bit(val: int) -> list[int]:
-    """Encode a 32-bit integer into two 16-bit registers (big-endian)."""
     return [(val >> 16) & 0xFFFF, val & 0xFFFF]
+
+def parse_counter(high: int, low: int) -> int | None:
+    """Parse 32-bit counter and return None if unavailable (0xFFFFFFFF)."""
+    val = decode_32bit(high, low)
+    if val == 4294967295:  # 0xFFFFFFFF
+        return None
+    return val
 
 class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
     """Class to manage fetching data from Komfovent C5 unit via Modbus."""
@@ -129,7 +141,7 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             raw_data: dict[int | str, Any] = {}
 
             async def _read_block(address: int, count: int) -> list[int] | None:
-                wire_address = address - 1  # 0-indexing translation
+                wire_address = address - 1 
                 try:
                     sig = inspect.signature(self.client.read_holding_registers)
                     kwargs = {}
@@ -153,30 +165,23 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
                     _LOGGER.debug("Exception reading Modbus block starting at %s: %s", address, err)
                     return None
 
-            # Clock (Read 5 registers: 450 to 454)
             block_rtc = await _read_block(REG_RTC_TIME, 5)
             await asyncio.sleep(0.3)
-            
-            # General Status
             block_on_off = await _read_block(REG_ON_OFF, 1)
             await asyncio.sleep(0.3)
             block_modes = await _read_block(100, 29)
             await asyncio.sleep(0.3)
             block_override = await _read_block(REG_OVERRIDE_ENABLE, 9)
             await asyncio.sleep(0.3)
-            
-            # Split Heaters
             heater_water = await _read_block(REG_WATER_HEATER, 1)
             await asyncio.sleep(0.3)
             heater_cooler = await _read_block(REG_WATER_COOLER, 1)
             await asyncio.sleep(0.3)
             heater_electric = await _read_block(REG_ELECTRIC_HEATER, 1)
             await asyncio.sleep(0.3)
-            
             block_alarms = await _read_block(REG_ALARM_COUNT, 11)
             await asyncio.sleep(0.3)
             
-            # Split Monitoring
             block_mon_1 = await _read_block(2000, 24)       
             await asyncio.sleep(0.3)
             block_elec_heater_level = await _read_block(REG_ELECTRIC_HEATER_LEVEL, 1)
@@ -190,20 +195,17 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             block_mon_4 = await _read_block(2045, 1)        
             await asyncio.sleep(0.3)
             
-            block_efficiency = await _read_block(REG_EFFICIENCY, 8)
+            # WIDENED TO 23 REGISTERS TO CAPTURE LIFETIME COUNTERS (2201 - 2223)
+            block_efficiency = await _read_block(REG_EFFICIENCY, 23)
             await asyncio.sleep(0.3)
             
-            # Split Filters
             filter_outdoor = await _read_block(REG_OUTDOOR_FILTER_DIRTY, 1)
             await asyncio.sleep(0.3)
             filter_extract = await _read_block(REG_EXTRACT_FILTER_DIRTY, 1)
 
-            # Validate critical blocks
             if block_on_off is None or block_mon_1 is None:
-                _LOGGER.error("Could not read critical Modbus registers from Komfovent C5")
                 raise UpdateFailed("Critical Modbus data blocks could not be read")
 
-            # Parse RTC Time
             if block_rtc:
                 hour = (block_rtc[0] >> 8) & 0xFF
                 minute = block_rtc[0] & 0xFF
@@ -216,25 +218,20 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
                     raw_data["rtc_month"] = month
                     raw_data["rtc_day"] = day
 
-            # Parse Block 1 (On/Off)
             raw_data[REG_ON_OFF] = block_on_off[0]
 
-            # Parse Block 2 (Modes/Setpoints)
             if block_modes:
                 raw_data[100] = block_modes[0]  
                 raw_data[REG_COMFORT1_TEMP] = block_modes[5]
                 raw_data[REG_COMFORT2_TEMP] = block_modes[10]
                 raw_data[REG_ECONOMY1_TEMP] = block_modes[15]
                 raw_data[REG_ECONOMY2_TEMP] = block_modes[20]
-                
                 raw_data[REG_SPECIAL_SUPPLY_FLOW] = decode_32bit(block_modes[21], block_modes[22])
                 raw_data[REG_SPECIAL_EXTRACT_FLOW] = decode_32bit(block_modes[23], block_modes[24])
                 raw_data[REG_SPECIAL_TEMP] = block_modes[25]
-                
                 raw_data[REG_FLOW_CONTROL_MODE] = block_modes[27]
                 raw_data[REG_TEMP_CONTROL_MODE] = block_modes[28]
 
-            # Parse Block 3 (Override & Settings)
             if block_override:
                 raw_data[REG_OVERRIDE_ENABLE] = block_override[0]
                 raw_data[REG_OVERRIDE_TYPE] = block_override[1]
@@ -243,17 +240,14 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
                 raw_data[REG_DEMAND_CONTROL] = block_override[5]
                 raw_data[REG_RECIRC_CONTROL] = block_override[7]
 
-            # Parse Block 4 (Heaters & Coolers) safely
             if heater_water: raw_data[REG_WATER_HEATER] = heater_water[0]
             if heater_cooler: raw_data[REG_WATER_COOLER] = heater_cooler[0]
             if heater_electric: raw_data[REG_ELECTRIC_HEATER] = heater_electric[0]
 
-            # Parse Block 5 (Alarms)
             if block_alarms:
                 raw_data[REG_ALARM_COUNT] = block_alarms[0]
                 raw_data["alarm_codes"] = [code for code in block_alarms[1:] if code != 0]
 
-            # Parse Block 6 (Monitoring Data Chunks)
             if block_mon_1:
                 raw_data[REG_STATUS] = block_mon_1[0]
                 raw_data[REG_CURRENT_MODE] = block_mon_1[1]
@@ -291,17 +285,30 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             if block_mon_3: raw_data[REG_INTERNAL_SUPPLY_TEMP] = to_signed_16(block_mon_3[0]) / 10.0
             if block_mon_4: raw_data[REG_ALARM_DOUT] = block_mon_4[0]
 
-            # Parse Block 7 (Efficiency & SFP)
-            if block_efficiency:
+            # Parse Block 7 (Efficiency, SFP, and Extended Counters)
+            if block_efficiency and len(block_efficiency) >= 23:
                 raw_data[REG_EFFICIENCY] = 0 if block_efficiency[0] == 255 else block_efficiency[0]
                 raw_data[REG_ENERGY_SAVING] = 0 if block_efficiency[1] == 255 else block_efficiency[1]
-                raw_data[REG_EXCHANGER_RECOVERY] = decode_32bit(block_efficiency[2], block_efficiency[3])
+                
+                # Exchanger Recovery can sometimes return 0xFFFFFFFF if unavailable
+                raw_data[REG_EXCHANGER_RECOVERY] = parse_counter(block_efficiency[2], block_efficiency[3])
+                
                 raw_data[REG_SUPPLY_SFP] = block_efficiency[4] / 100.0
                 raw_data[REG_EXHAUST_SFP] = block_efficiency[5] / 100.0
                 raw_data[REG_OUTDOOR_FILTER_IMPURITY] = block_efficiency[6]
                 raw_data[REG_EXTRACT_FILTER_IMPURITY] = block_efficiency[7]
 
-            # Parse Block 8 (Filters Dirty Binary flags)
+                # --- NEW COUNTERS ---
+                raw_data[REG_AIR_HEATER_HOURS] = parse_counter(block_efficiency[8], block_efficiency[9])
+                raw_data[REG_SUPPLY_FAN_HOURS] = parse_counter(block_efficiency[10], block_efficiency[11])
+                raw_data[REG_EXHAUST_FAN_HOURS] = parse_counter(block_efficiency[12], block_efficiency[13])
+                raw_data[REG_SUPPLY_FAN_POWER] = block_efficiency[14]
+                raw_data[REG_EXHAUST_FAN_POWER] = block_efficiency[15]
+                # Index 16 is Active Functions (omitted per user scope)
+                raw_data[REG_AIR_COOLER_HOURS] = parse_counter(block_efficiency[17], block_efficiency[18])
+                raw_data[REG_HEAT_EXCHANGER_KWH] = parse_counter(block_efficiency[19], block_efficiency[20])
+                raw_data[REG_AIR_HEATER_KWH] = parse_counter(block_efficiency[21], block_efficiency[22])
+
             if filter_outdoor: raw_data[REG_OUTDOOR_FILTER_DIRTY] = filter_outdoor[0]
             if filter_extract: raw_data[REG_EXTRACT_FILTER_DIRTY] = filter_extract[0]
 
@@ -309,12 +316,9 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
         except Exception as err:
             raise UpdateFailed(f"Modbus error during update: {err}") from err
         finally:
-            # THIS IS THE MAGIC LINE: Gracefully sever the connection at the end of every 
-            # poll so PyModbus's auto-reconnect loop is silenced completely.
             self.client.close()
 
     async def async_write_register(self, address: int, value: int) -> None:
-        """Write a single value to a Modbus register."""
         wire_address = address - 1  
         _LOGGER.debug("Writing Modbus register %s (wire %s) = %s", address, wire_address, value)
         try:
@@ -336,7 +340,6 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             self.hass.async_create_task(self.async_request_refresh())
 
     async def async_write_registers(self, address: int, values: list[int]) -> None:
-        """Write multiple values to Modbus registers."""
         wire_address = address - 1  
         _LOGGER.debug("Writing Modbus registers %s (wire %s) = %s", address, wire_address, values)
         try:
@@ -358,10 +361,7 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             self.hass.async_create_task(self.async_request_refresh())
 
     async def async_sync_time(self) -> None:
-        """Smart sync the controller's clock with Home Assistant's local time."""
         now = datetime.now()
-        
-        # Always write Time and Seconds
         time_reg = (now.hour << 8) | now.minute
         sec_reg = now.second
         
@@ -370,13 +370,11 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
         await asyncio.sleep(0.1)
         await self.async_write_register(REG_RTC_SECONDS, sec_reg)
 
-        # Smart Check: Fetch current date from our last poll
         current_data = self.data or {}
         c_year = current_data.get("rtc_year")
         c_month = current_data.get("rtc_month")
         c_day = current_data.get("rtc_day")
 
-        # Only push Year and Date registers if they are out of sync
         if c_year != now.year or c_month != now.month or c_day != now.day:
             _LOGGER.info("Syncing Komfovent RTC Date to: %04d-%02d-%02d", now.year, now.month, now.day)
             date_reg = (now.month << 8) | now.day
@@ -386,12 +384,11 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             await self.async_write_register(REG_RTC_DATE, date_reg)
             await asyncio.sleep(0.1)
             await self.async_write_register(REG_RTC_YEAR, year_reg)
-        else:
-            _LOGGER.debug("Komfovent RTC date is already correct, skipping date/year update.")
 
     async def async_reset_alarms(self) -> None:
-        """Reset the controller's active alarms."""
-        _LOGGER.info("Sending magic hex command to reset Komfovent alarms...")
-        
-        # The manual requires writing the specific hex value 0x99C5 (39365) to reset alarms
+        _LOGGER.warning("Resetting Komfovent alarms and filter statuses via Modbus...")
+        await self.async_write_register(REG_OUTDOOR_FILTER_DIRTY, 0)
+        await asyncio.sleep(0.1)
+        await self.async_write_register(REG_EXTRACT_FILTER_DIRTY, 0)
+        await asyncio.sleep(0.1)
         await self.async_write_register(REG_ALARM_COUNT, 0x99C5)
