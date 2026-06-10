@@ -1,17 +1,13 @@
 """Data update coordinator for Komfovent C5 integration."""
 from __future__ import annotations
-
 import asyncio
 import inspect
 import logging
 from datetime import datetime, timedelta
 from typing import Any
-
 from pymodbus.client import AsyncModbusTcpClient
-
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-
 from .const import (
     CONF_SLAVE_ID,
     DOMAIN,
@@ -93,16 +89,20 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+
 def to_signed_16(val: int) -> int:
     if val >= 0x8000:
         return val - 0x10000
     return val
 
+
 def decode_32bit(reg_high: int, reg_low: int) -> int:
     return (reg_high << 16) + reg_low
 
+
 def encode_32bit(val: int) -> list[int]:
     return [(val >> 16) & 0xFFFF, val & 0xFFFF]
+
 
 def parse_counter(high: int, low: int) -> int | None:
     """Parse 32-bit counter and return None if unavailable (0xFFFFFFFF)."""
@@ -110,6 +110,7 @@ def parse_counter(high: int, low: int) -> int | None:
     if val == 4294967295:  # 0xFFFFFFFF
         return None
     return val
+
 
 class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
     """Class to manage fetching data from Komfovent C5 unit via Modbus."""
@@ -149,7 +150,7 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
                 wire_address = address - 1 
                 try:
                     sig = inspect.signature(self.client.read_holding_registers)
-                    kwargs = {}
+                    kwargs = {} 
                     if 'device_id' in sig.parameters: kwargs['device_id'] = self.slave_id
                     elif 'slave' in sig.parameters: kwargs['slave'] = self.slave_id
                     elif 'unit' in sig.parameters: kwargs['unit'] = self.slave_id
@@ -326,8 +327,22 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
     async def async_write_register(self, address: int, value: int) -> None:
         wire_address = address - 1  
         _LOGGER.debug("Writing Modbus register %s (wire %s) = %s", address, wire_address, value)
+        
+        # Retry connection up to 3 times to handle transient disconnects or device busy state
+        connected = False
+        for attempt in range(3):
+            connected = await self.client.connect()
+            if connected:
+                break
+            _LOGGER.warning("Modbus connect failed, retrying (%s/3)...", attempt + 1)
+            await asyncio.sleep(1)
+            
+        if not connected:
+            error_msg = "Failed to establish Modbus TCP connection for write"
+            _LOGGER.error(error_msg)
+            raise ConnectionError(error_msg)
+
         try:
-            await self.client.connect()
             sig = inspect.signature(self.client.write_register)
             kwargs = {}
             if 'device_id' in sig.parameters: kwargs['device_id'] = self.slave_id
@@ -335,8 +350,13 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             elif 'unit' in sig.parameters: kwargs['unit'] = self.slave_id
             else: kwargs['slave'] = self.slave_id
             
-            result = self.client.write_register(wire_address, value, **kwargs)
-            if inspect.isawaitable(result): await result
+            result = await self.client.write_register(wire_address, value, **kwargs)
+            
+            if result.isError():
+                error_msg = f"Modbus write returned error: {result}"
+                _LOGGER.error(error_msg)
+                raise ConnectionError(error_msg)
+                
         except Exception as err:
             _LOGGER.error("Failed to write Modbus register %s: %s", address, err)
             raise
@@ -347,8 +367,21 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
     async def async_write_registers(self, address: int, values: list[int]) -> None:
         wire_address = address - 1  
         _LOGGER.debug("Writing Modbus registers %s (wire %s) = %s", address, wire_address, values)
+        
+        connected = False
+        for attempt in range(3):
+            connected = await self.client.connect()
+            if connected:
+                break
+            _LOGGER.warning("Modbus connect failed, retrying (%s/3)...", attempt + 1)
+            await asyncio.sleep(1)
+            
+        if not connected:
+            error_msg = "Failed to establish Modbus TCP connection for write"
+            _LOGGER.error(error_msg)
+            raise ConnectionError(error_msg)
+
         try:
-            await self.client.connect()
             sig = inspect.signature(self.client.write_registers)
             kwargs = {}
             if 'device_id' in sig.parameters: kwargs['device_id'] = self.slave_id
@@ -356,8 +389,13 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             elif 'unit' in sig.parameters: kwargs['unit'] = self.slave_id
             else: kwargs['slave'] = self.slave_id
             
-            result = self.client.write_registers(wire_address, values, **kwargs)
-            if inspect.isawaitable(result): await result
+            result = await self.client.write_registers(wire_address, values, **kwargs)
+            
+            if result.isError():
+                error_msg = f"Modbus write returned error: {result}"
+                _LOGGER.error(error_msg)
+                raise ConnectionError(error_msg)
+                
         except Exception as err:
             _LOGGER.error("Failed to write Modbus registers %s: %s", address, err)
             raise
@@ -371,32 +409,72 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
         sec_reg = now.second
         
         _LOGGER.info("Syncing Komfovent RTC Time to: %02d:%02d:%02d", now.hour, now.minute, now.second)
-        await self.async_write_register(REG_RTC_TIME, time_reg)
-        await asyncio.sleep(0.1)
-        await self.async_write_register(REG_RTC_SECONDS, sec_reg)
+        
+        try:
+            connected = await self.client.connect()
+            if not connected:
+                raise ConnectionError("Failed to establish Modbus TCP connection for time sync")
 
-        current_data = self.data or {}
-        c_year = current_data.get("rtc_year")
-        c_month = current_data.get("rtc_month")
-        c_day = current_data.get("rtc_day")
+            sig = inspect.signature(self.client.write_register)
+            kwargs = {}
+            if 'device_id' in sig.parameters: kwargs['device_id'] = self.slave_id
+            elif 'slave' in sig.parameters: kwargs['slave'] = self.slave_id
+            elif 'unit' in sig.parameters: kwargs['unit'] = self.slave_id
+            else: kwargs['slave'] = self.slave_id
 
-        if c_year != now.year or c_month != now.month or c_day != now.day:
-            _LOGGER.info("Syncing Komfovent RTC Date to: %04d-%02d-%02d", now.year, now.month, now.day)
-            date_reg = (now.month << 8) | now.day
-            year_reg = now.year
-            
+            await self.client.write_register(REG_RTC_TIME - 1, time_reg, **kwargs)
             await asyncio.sleep(0.1)
-            await self.async_write_register(REG_RTC_DATE, date_reg)
-            await asyncio.sleep(0.1)
-            await self.async_write_register(REG_RTC_YEAR, year_reg)
+            await self.client.write_register(REG_RTC_SECONDS - 1, sec_reg, **kwargs)
+
+            current_data = self.data or {}
+            c_year = current_data.get("rtc_year")
+            c_month = current_data.get("rtc_month")
+            c_day = current_data.get("rtc_day")
+
+            if c_year != now.year or c_month != now.month or c_day != now.day:
+                _LOGGER.info("Syncing Komfovent RTC Date to: %04d-%02d-%02d", now.year, now.month, now.day)
+                date_reg = (now.month << 8) | now.day
+                year_reg = now.year
+                
+                await asyncio.sleep(0.1)
+                await self.client.write_register(REG_RTC_DATE - 1, date_reg, **kwargs)
+                await asyncio.sleep(0.1)
+                await self.client.write_register(REG_RTC_YEAR - 1, year_reg, **kwargs)
+                
+        except Exception as err:
+            _LOGGER.error("Failed to sync Komfovent time: %s", err)
+            raise
+        finally:
+            self.client.close()
+            self.hass.async_create_task(self.async_request_refresh())
 
     async def async_reset_alarms(self) -> None:
         _LOGGER.warning("Resetting Komfovent alarms and filter statuses via Modbus...")
-        await self.async_write_register(REG_OUTDOOR_FILTER_DIRTY, 0)
-        await asyncio.sleep(0.1)
-        await self.async_write_register(REG_EXTRACT_FILTER_DIRTY, 0)
-        await asyncio.sleep(0.1)
-        await self.async_write_register(REG_ALARM_COUNT, 0x99C5)
+        try:
+            # Open connection ONCE for all writes to prevent connect/close storms
+            connected = await self.client.connect()
+            if not connected:
+                raise ConnectionError("Failed to establish Modbus TCP connection for reset")
+
+            sig = inspect.signature(self.client.write_register)
+            kwargs = {}
+            if 'device_id' in sig.parameters: kwargs['device_id'] = self.slave_id
+            elif 'slave' in sig.parameters: kwargs['slave'] = self.slave_id
+            elif 'unit' in sig.parameters: kwargs['unit'] = self.slave_id
+            else: kwargs['slave'] = self.slave_id
+
+            await self.client.write_register(REG_OUTDOOR_FILTER_DIRTY - 1, 0, **kwargs)
+            await asyncio.sleep(0.2)
+            await self.client.write_register(REG_EXTRACT_FILTER_DIRTY - 1, 0, **kwargs)
+            await asyncio.sleep(0.2)
+            await self.client.write_register(REG_ALARM_COUNT - 1, 0x99C5, **kwargs)
+            
+        except Exception as err:
+            _LOGGER.error("Failed to reset Komfovent alarms: %s", err)
+            raise
+        finally:
+            self.client.close()
+            self.hass.async_create_task(self.async_request_refresh())
 
     async def async_calibrate_filters(self) -> None:
         """Trigger the clean air filters calibration process."""
