@@ -5,6 +5,9 @@
 
 A robust, local-polling Home Assistant custom component to monitor and control **Komfovent** ventilation units equipped with the **C5 Controller** via **Modbus TCP**.
 
+<img width="765" height="1024" alt="d835de52-ad9d-46a9-a22b-9828a05159e3" src="https://github.com/user-attachments/assets/215ad3fe-34cc-4209-bd62-58cf023d8cbd" />
+
+
 Unlike generic Modbus templates, this integration is purpose-built for the Komfovent C5 memory map. It handles the controller's specific network polling limits, translates standard Home Assistant climate entities into Komfovent preset modes, and dynamically handles unmapped hardware (like missing heaters) without crashing.
 
 ## ✨ Features
