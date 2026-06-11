@@ -89,6 +89,11 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# --- OPTIMIZED DELAY CONSTANTS ---
+MODBUS_BLOCK_DELAY = 0.3       # Delay between Modbus block reads to prevent controller overload
+MAX_CONNECT_RETRIES = 3        # Number of connection attempts
+CONNECT_RETRY_DELAY = 3.0      # Seconds to wait between connection retry attempts
+
 
 def to_signed_16(val: int) -> int:
     if val >= 0x8000:
@@ -136,12 +141,26 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             update_interval=timedelta(seconds=scan_interval),
         )
 
+    async def _ensure_connected(self) -> bool:
+        """Ensure Modbus client is connected, with retries and delays."""
+        for attempt in range(MAX_CONNECT_RETRIES):
+            connected = await self.client.connect()
+            if connected:
+                return True
+            _LOGGER.warning(
+                "Modbus connect failed, retrying (%s/%s) in %s seconds...",
+                attempt + 1, MAX_CONNECT_RETRIES, CONNECT_RETRY_DELAY
+            )
+            await asyncio.sleep(CONNECT_RETRY_DELAY)
+            
+        _LOGGER.error("Failed to establish Modbus TCP connection after %s attempts", MAX_CONNECT_RETRIES)
+        return False
+
     async def _async_update_data(self) -> dict[int | str, Any]:
         """Fetch data from Modbus."""
         _LOGGER.debug("Connecting to Modbus TCP server %s:%s", self.host, self.port)
         try:
-            connected = await self.client.connect()
-            if not connected:
+            if not await self._ensure_connected():
                 raise UpdateFailed("Failed to establish Modbus TCP connection")
 
             raw_data: dict[int | str, Any] = {}
@@ -172,42 +191,42 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
                     return None
 
             block_rtc = await _read_block(REG_RTC_TIME, 5)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             block_on_off = await _read_block(REG_ON_OFF, 1)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             block_modes = await _read_block(100, 29)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             block_override = await _read_block(REG_OVERRIDE_ENABLE, 9)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             heater_water = await _read_block(REG_WATER_HEATER, 1)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             heater_cooler = await _read_block(REG_WATER_COOLER, 1)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             heater_electric = await _read_block(REG_ELECTRIC_HEATER, 1)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             block_alarms = await _read_block(REG_ALARM_COUNT, 11)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             
             block_mon_1 = await _read_block(2000, 24)       
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             block_elec_heater_level = await _read_block(REG_ELECTRIC_HEATER_LEVEL, 1)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             block_mon_2 = await _read_block(2032, 2)        
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             block_mon_flow_sp = await _read_block(2036, 4)  
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             block_mon_3 = await _read_block(2040, 1)        
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             block_mon_4 = await _read_block(2045, 1)        
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             
             block_efficiency = await _read_block(REG_EFFICIENCY, 23)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             
             filter_outdoor = await _read_block(REG_OUTDOOR_FILTER_DIRTY, 1)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             filter_extract = await _read_block(REG_EXTRACT_FILTER_DIRTY, 1)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             
             block_service = await _read_block(REG_FIRMWARE_VERSION, 2)
 
@@ -328,19 +347,8 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
         wire_address = address - 1  
         _LOGGER.debug("Writing Modbus register %s (wire %s) = %s", address, wire_address, value)
         
-        # Retry connection up to 3 times to handle transient disconnects or device busy state
-        connected = False
-        for attempt in range(3):
-            connected = await self.client.connect()
-            if connected:
-                break
-            _LOGGER.warning("Modbus connect failed, retrying (%s/3)...", attempt + 1)
-            await asyncio.sleep(1)
-            
-        if not connected:
-            error_msg = "Failed to establish Modbus TCP connection for write"
-            _LOGGER.error(error_msg)
-            raise ConnectionError(error_msg)
+        if not await self._ensure_connected():
+            raise ConnectionError("Failed to establish Modbus TCP connection for write")
 
         try:
             sig = inspect.signature(self.client.write_register)
@@ -368,18 +376,8 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
         wire_address = address - 1  
         _LOGGER.debug("Writing Modbus registers %s (wire %s) = %s", address, wire_address, values)
         
-        connected = False
-        for attempt in range(3):
-            connected = await self.client.connect()
-            if connected:
-                break
-            _LOGGER.warning("Modbus connect failed, retrying (%s/3)...", attempt + 1)
-            await asyncio.sleep(1)
-            
-        if not connected:
-            error_msg = "Failed to establish Modbus TCP connection for write"
-            _LOGGER.error(error_msg)
-            raise ConnectionError(error_msg)
+        if not await self._ensure_connected():
+            raise ConnectionError("Failed to establish Modbus TCP connection for write")
 
         try:
             sig = inspect.signature(self.client.write_registers)
@@ -411,8 +409,7 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
         _LOGGER.info("Syncing Komfovent RTC Time to: %02d:%02d:%02d", now.hour, now.minute, now.second)
         
         try:
-            connected = await self.client.connect()
-            if not connected:
+            if not await self._ensure_connected():
                 raise ConnectionError("Failed to establish Modbus TCP connection for time sync")
 
             sig = inspect.signature(self.client.write_register)
@@ -423,7 +420,7 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             else: kwargs['slave'] = self.slave_id
 
             await self.client.write_register(REG_RTC_TIME - 1, time_reg, **kwargs)
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             await self.client.write_register(REG_RTC_SECONDS - 1, sec_reg, **kwargs)
 
             current_data = self.data or {}
@@ -436,9 +433,9 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
                 date_reg = (now.month << 8) | now.day
                 year_reg = now.year
                 
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(MODBUS_BLOCK_DELAY)
                 await self.client.write_register(REG_RTC_DATE - 1, date_reg, **kwargs)
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(MODBUS_BLOCK_DELAY)
                 await self.client.write_register(REG_RTC_YEAR - 1, year_reg, **kwargs)
                 
         except Exception as err:
@@ -449,11 +446,11 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             self.hass.async_create_task(self.async_request_refresh())
 
     async def async_reset_alarms(self) -> None:
+        """Reset alarms and filter statuses in a single connection to prevent connect/close storms."""
         _LOGGER.warning("Resetting Komfovent alarms and filter statuses via Modbus...")
         try:
-            # Open connection ONCE for all writes to prevent connect/close storms
-            connected = await self.client.connect()
-            if not connected:
+            # Open connection ONCE for all writes
+            if not await self._ensure_connected():
                 raise ConnectionError("Failed to establish Modbus TCP connection for reset")
 
             sig = inspect.signature(self.client.write_register)
@@ -464,9 +461,9 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
             else: kwargs['slave'] = self.slave_id
 
             await self.client.write_register(REG_OUTDOOR_FILTER_DIRTY - 1, 0, **kwargs)
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             await self.client.write_register(REG_EXTRACT_FILTER_DIRTY - 1, 0, **kwargs)
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(MODBUS_BLOCK_DELAY)
             await self.client.write_register(REG_ALARM_COUNT - 1, 0x99C5, **kwargs)
             
         except Exception as err:
@@ -493,7 +490,6 @@ class KomfoventCoordinator(DataUpdateCoordinator[dict[int | str, Any]]):
 
     async def async_set_special_config_bit(self, bit: int, enable: bool) -> None:
         """Set or clear a specific bit in the Special Configuration register."""
-        # Use 31 (all enabled) as default if data hasn't loaded yet
         current_val = self.data.get(REG_SPECIAL_CONFIGURATION, 31)
         if enable:
             new_val = current_val | (1 << bit)
